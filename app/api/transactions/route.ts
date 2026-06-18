@@ -1,23 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
-import { rateLimit } from "@/lib/ratelimit";
 import { logAudit } from "@/lib/audit";
 
 export async function GET(req: NextRequest) {
   // Autenticación
   const { user, response } = await requireAuth(req);
   if (response) return response;
-
-  // Rate limiting: 120 requests por minuto por IP
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0] ?? "unknown";
-  const { ok, remaining } = rateLimit(ip, 120);
-  if (!ok) {
-    return NextResponse.json({ error: "Demasiadas solicitudes. Intenta en un momento." }, {
-      status: 429,
-      headers: { "Retry-After": "60" },
-    });
-  }
 
   const { searchParams } = new URL(req.url);
   const search        = searchParams.get("search")?.slice(0, 100) || "";
@@ -69,7 +58,5 @@ export async function GET(req: NextRequest) {
     result_count: count ?? 0,
   });
 
-  return NextResponse.json({ data, count, page, pageSize }, {
-    headers: { "X-RateLimit-Remaining": String(remaining) },
-  });
+  return NextResponse.json({ data, count, page, pageSize });
 }

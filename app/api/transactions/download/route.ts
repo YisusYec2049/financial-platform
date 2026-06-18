@@ -1,23 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
-import { rateLimit } from "@/lib/ratelimit";
 import { logAudit } from "@/lib/audit";
 
 export async function GET(req: NextRequest) {
   // Autenticación
   const { user, response } = await requireAuth(req);
   if (response) return response;
-
-  // Rate limiting más estricto para descargas: 10 por minuto por IP
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0] ?? "unknown";
-  const { ok } = rateLimit(ip, 10, 60_000);
-  if (!ok) {
-    return NextResponse.json({ error: "Límite de descargas alcanzado. Espera un minuto." }, {
-      status: 429,
-      headers: { "Retry-After": "60" },
-    });
-  }
 
   const { searchParams } = new URL(req.url);
   const search        = searchParams.get("search")?.slice(0, 100) || "";
@@ -28,16 +17,20 @@ export async function GET(req: NextRequest) {
   const payTo         = searchParams.get("pay_to") || "";
 
   const supabase = createAdminClient();
+  const MAX_ROWS = 50_000;
   const BATCH = 1000;
   let allData: Record<string, unknown>[] = [];
   let from = 0;
 
-  while (true) {
+  while (allData.length < MAX_ROWS) {
+    const remaining = MAX_ROWS - allData.length;
+    const batchSize = Math.min(BATCH, remaining);
+
     let query = supabase
       .from("consolidated_transactions")
       .select("*")
       .order("registration_date", { ascending: false })
-      .range(from, from + BATCH - 1);
+      .range(from, from + batchSize - 1);
 
     if (search) {
       query = query.or(
@@ -59,9 +52,11 @@ export async function GET(req: NextRequest) {
     if (!data || data.length === 0) break;
 
     allData = allData.concat(data);
-    if (data.length < BATCH) break;
-    from += BATCH;
+    if (data.length < batchSize) break;
+    from += batchSize;
   }
+
+  const truncated = allData.length >= MAX_ROWS;
 
   const seen = new Set<string>();
   const deduped = allData.filter((row) => {
@@ -78,5 +73,5 @@ export async function GET(req: NextRequest) {
     result_count: deduped.length,
   });
 
-  return NextResponse.json({ data: deduped, count: deduped.length });
+  return NextResponse.json({ data: deduped, count: deduped.length, truncated });
 }

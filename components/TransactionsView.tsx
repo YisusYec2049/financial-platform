@@ -33,7 +33,9 @@ export default function TransactionsView() {
   const [methods, setMethods]             = useState<{ label: string; value: string }[]>([]);
   const [lastUpdate, setLastUpdate]       = useState<Date | null>(null);
   const [tableWidth, setTableWidth]       = useState(0);
+  const [fetchError, setFetchError]       = useState("");
   const searchTimeout                     = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortControllerRef                = useRef<AbortController | null>(null);
   const tableContainerRef                 = useRef<HTMLDivElement>(null);
   const fixedScrollRef                    = useRef<HTMLDivElement>(null);
 
@@ -62,7 +64,12 @@ export default function TransactionsView() {
   }, []);
 
   const fetchData = useCallback(async (currentPage = 1) => {
+    if (abortControllerRef.current) abortControllerRef.current.abort();
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
+
     setLoading(true);
+    setFetchError("");
     const params = new URLSearchParams();
     if (search)        params.set("search", search);
     if (paymentMethod) params.set("payment_method", paymentMethod);
@@ -72,12 +79,19 @@ export default function TransactionsView() {
     if (payTo)         params.set("pay_to", payTo);
     params.set("page", String(currentPage));
 
-    const res  = await fetch(`/api/transactions?${params}`);
-    const json = await res.json();
-    setData(json.data || []);
-    setTotal(json.count || 0);
-    setLastUpdate(new Date());
-    setLoading(false);
+    try {
+      const res  = await fetch(`/api/transactions?${params}`, { signal });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al cargar datos");
+      setData(json.data || []);
+      setTotal(json.count || 0);
+      setLastUpdate(new Date());
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return;
+      setFetchError(err instanceof Error ? err.message : "Error inesperado");
+    } finally {
+      setLoading(false);
+    }
   }, [search, paymentMethod, regFrom, regTo, payFrom, payTo]);
 
   useEffect(() => {
@@ -162,6 +176,7 @@ export default function TransactionsView() {
 
   const downloadExcel = async () => {
     setLoading(true);
+    setFetchError("");
     const params = new URLSearchParams();
     if (search)        params.set("search", search);
     if (paymentMethod) params.set("payment_method", paymentMethod);
@@ -170,15 +185,23 @@ export default function TransactionsView() {
     if (payFrom)       params.set("pay_from", payFrom);
     if (payTo)         params.set("pay_to", payTo);
 
-    const res     = await fetch(`/api/transactions/download?${params}`);
-    const json    = await res.json();
-    const allRows = json.data || [];
-
-    const ws = XLSX.utils.json_to_sheet(allRows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Transacciones");
-    XLSX.writeFile(wb, `transacciones_${new Date().toISOString().slice(0, 10)}.xlsx`);
-    setLoading(false);
+    try {
+      const res  = await fetch(`/api/transactions/download?${params}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al descargar");
+      const allRows = json.data || [];
+      if (json.truncated) {
+        setFetchError("Se descargaron las primeras 50,000 filas. Usa los filtros de fecha para acotar la búsqueda.");
+      }
+      const ws = XLSX.utils.json_to_sheet(allRows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Transacciones");
+      XLSX.writeFile(wb, `transacciones_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : "Error al descargar el archivo");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const fmt = (v: string | null) => v || "—";
@@ -283,6 +306,12 @@ export default function TransactionsView() {
       <div className="px-6 py-2 text-sm text-gray-500">
         {loading ? "Cargando..." : `${total.toLocaleString("es-CO")} registros encontrados`}
       </div>
+
+      {fetchError && (
+        <div className="mx-6 mb-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          {fetchError}
+        </div>
+      )}
 
       {/* Tabla */}
       <div ref={tableContainerRef} className="px-6 pb-6 overflow-x-auto">
