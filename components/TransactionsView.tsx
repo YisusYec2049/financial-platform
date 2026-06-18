@@ -34,6 +34,9 @@ export default function TransactionsView() {
   const [lastUpdate, setLastUpdate]       = useState<Date | null>(null);
   const [tableWidth, setTableWidth]       = useState(0);
   const [fetchError, setFetchError]       = useState("");
+  const [dropdownOpen, setDropdownOpen]   = useState(false);
+  const [newRecords, setNewRecords]       = useState(false);
+  const dropdownRef                       = useRef<HTMLDivElement>(null);
   const searchTimeout                     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef                = useRef<AbortController | null>(null);
   const tableContainerRef                 = useRef<HTMLDivElement>(null);
@@ -86,6 +89,7 @@ export default function TransactionsView() {
       setData(json.data || []);
       setTotal(json.count || 0);
       setLastUpdate(new Date());
+      setNewRecords(false);
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
       setFetchError(err instanceof Error ? err.message : "Error inesperado");
@@ -107,13 +111,28 @@ export default function TransactionsView() {
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
   }, [search, paymentMethod, regFrom, regTo, payFrom, payTo, fetchData]);
 
-  // Auto-refresh cada 5 segundos
+  // Polling silencioso cada 30 segundos para detectar nuevos registros
   useEffect(() => {
-    const interval = setInterval(() => {
-      fetchData(page);
-    }, 5000);
+    const interval = setInterval(async () => {
+      try {
+        const params = new URLSearchParams();
+        if (search)        params.set("search", search);
+        if (paymentMethod) params.set("payment_method", paymentMethod);
+        if (regFrom)       params.set("reg_from", regFrom);
+        if (regTo)         params.set("reg_to", regTo);
+        if (payFrom)       params.set("pay_from", payFrom);
+        if (payTo)         params.set("pay_to", payTo);
+        params.set("page", "1");
+
+        const res  = await fetch(`/api/transactions?${params}`);
+        const json = await res.json();
+        if (res.ok && json.count > total) setNewRecords(true);
+      } catch {
+        // falla silenciosa, no interrumpir al usuario
+      }
+    }, 30_000);
     return () => clearInterval(interval);
-  }, [fetchData, page]);
+  }, [search, paymentMethod, regFrom, regTo, payFrom, payTo, total]);
 
   // Sincronizar scroll entre tabla y barra fija
   useEffect(() => {
@@ -174,6 +193,16 @@ export default function TransactionsView() {
     fetchData(p);
   };
 
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const downloadExcel = async () => {
     setLoading(true);
     setFetchError("");
@@ -204,6 +233,54 @@ export default function TransactionsView() {
     }
   };
 
+  const downloadCSV = async () => {
+    setDropdownOpen(false);
+    setLoading(true);
+    setFetchError("");
+    const params = new URLSearchParams();
+    if (search)        params.set("search", search);
+    if (paymentMethod) params.set("payment_method", paymentMethod);
+    if (regFrom)       params.set("reg_from", regFrom);
+    if (regTo)         params.set("reg_to", regTo);
+    if (payFrom)       params.set("pay_from", payFrom);
+    if (payTo)         params.set("pay_to", payTo);
+
+    try {
+      const res  = await fetch(`/api/transactions/download?${params}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al descargar");
+      if (json.truncated) {
+        setFetchError("Se descargaron las primeras 50,000 filas. Usa los filtros de fecha para acotar la búsqueda.");
+      }
+      const rows: Record<string, unknown>[] = json.data || [];
+      if (rows.length === 0) return;
+
+      const headers = Object.keys(rows[0]);
+      const csvLines = [
+        headers.join(","),
+        ...rows.map((row) =>
+          headers.map((h) => {
+            const val = row[h] ?? "";
+            const str = String(val).replace(/"/g, '""');
+            return str.includes(",") || str.includes("\n") || str.includes('"') ? `"${str}"` : str;
+          }).join(",")
+        ),
+      ];
+
+      const blob = new Blob([csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      a.download = `transacciones_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : "Error al descargar el archivo");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const fmt = (v: string | null) => v || "—";
   const fmtMonto = (v: number | null) =>
     v != null ? new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(v) : "—";
@@ -225,24 +302,48 @@ export default function TransactionsView() {
           )}
         </div>
         <div className="flex gap-2">
+          {/* Dropdown de descarga */}
+          <div ref={dropdownRef} className="relative">
+            <button
+              onClick={() => setDropdownOpen((o) => !o)}
+              disabled={loading}
+              className="flex items-center gap-1.5 bg-gray-900 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-50"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Descargar
+              <svg className="w-3 h-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {dropdownOpen && (
+              <div className="absolute right-0 mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-50">
+                <button
+                  onClick={() => { setDropdownOpen(false); downloadExcel(); }}
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-t-lg"
+                >
+                  Descargar Excel
+                </button>
+                <button
+                  onClick={downloadCSV}
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-b-lg border-t border-gray-100"
+                >
+                  Descargar CSV
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Cerrar sesión */}
           <button
             onClick={handleLogout}
-            className="flex items-center gap-1.5 border border-gray-300 text-gray-700 text-sm px-3 py-1.5 rounded-lg hover:bg-gray-50 transition-colors"
+            className="flex items-center gap-1.5 bg-red-600 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-red-700 transition-colors"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
             </svg>
             Cerrar sesión
-          </button>
-          <button
-            onClick={downloadExcel}
-            disabled={loading}
-            className="flex items-center gap-1.5 bg-gray-900 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-50"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            Descargar Excel
           </button>
         </div>
       </div>
@@ -310,6 +411,20 @@ export default function TransactionsView() {
       {fetchError && (
         <div className="mx-6 mb-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
           {fetchError}
+        </div>
+      )}
+
+      {newRecords && (
+        <div className="mx-6 mb-2">
+          <button
+            onClick={() => fetchData(1)}
+            className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Hay nuevos registros — clic para actualizar
+          </button>
         </div>
       )}
 
