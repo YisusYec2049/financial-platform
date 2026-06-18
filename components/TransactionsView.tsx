@@ -307,7 +307,7 @@ export default function TransactionsView() {
             <button
               onClick={() => setDropdownOpen((o) => !o)}
               disabled={loading}
-              className="flex items-center gap-1.5 bg-gray-900 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 bg-gray-900 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-gray-700 active:scale-95 transition-all duration-150 disabled:opacity-50"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -338,7 +338,7 @@ export default function TransactionsView() {
           {/* Cerrar sesión */}
           <button
             onClick={handleLogout}
-            className="flex items-center gap-1.5 bg-red-600 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-red-700 transition-colors"
+            className="flex items-center gap-1.5 bg-red-600 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-red-700 active:scale-95 transition-all duration-150"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
@@ -418,7 +418,7 @@ export default function TransactionsView() {
         <div className="mx-6 mb-2">
           <button
             onClick={() => fetchData(1)}
-            className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+            className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-sm font-medium px-4 py-2 rounded-lg transition-all duration-150"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -447,16 +447,22 @@ export default function TransactionsView() {
           </thead>
           <tbody>
             {loading && data.length === 0 ? (
-              <tr>
-                <td colSpan={10} className="text-center py-12 text-gray-400">Cargando...</td>
-              </tr>
+              Array.from({ length: 8 }).map((_, i) => (
+                <tr key={i} className="border-t border-gray-100">
+                  {Array.from({ length: 10 }).map((_, j) => (
+                    <td key={j} className="px-4 py-3">
+                      <div className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * j * 7) % 40}%` }} />
+                    </td>
+                  ))}
+                </tr>
+              ))
             ) : data.length === 0 ? (
               <tr>
                 <td colSpan={10} className="text-center py-12 text-gray-400">No hay registros</td>
               </tr>
             ) : (
               data.map((row) => (
-                <tr key={row.id} className="border-t border-gray-100 hover:bg-gray-50 transition-colors">
+                <tr key={row.id} className="border-t border-gray-100 hover:bg-gray-50 transition-colors duration-100">
                   <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.registration_date)}</td>
                   <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.identification)}</td>
                   <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.payment_date)}</td>
@@ -483,22 +489,22 @@ export default function TransactionsView() {
             <span>Página {page} de {totalPages}</span>
             <div className="flex gap-1">
               <button onClick={() => handlePage(1)} disabled={page === 1}
-                className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-100">«</button>
+                className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">«</button>
               <button onClick={() => handlePage(page - 1)} disabled={page === 1}
-                className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-100">‹</button>
+                className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">‹</button>
               {[...Array(Math.min(5, totalPages))].map((_, i) => {
                 const p = Math.max(1, Math.min(page - 2, totalPages - 4)) + i;
                 return (
                   <button key={p} onClick={() => handlePage(p)}
-                    className={`px-2 py-1 border rounded hover:bg-gray-100 ${p === page ? "bg-gray-900 text-white border-gray-900" : ""}`}>
+                    className={`px-2 py-1 border rounded hover:bg-gray-100 active:scale-95 transition-all duration-150 ${p === page ? "bg-gray-900 text-white border-gray-900" : ""}`}>
                     {p}
                   </button>
                 );
               })}
               <button onClick={() => handlePage(page + 1)} disabled={page === totalPages}
-                className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-100">›</button>
+                className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">›</button>
               <button onClick={() => handlePage(totalPages)} disabled={page === totalPages}
-                className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-100">»</button>
+                className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">»</button>
             </div>
           </div>
         )}
