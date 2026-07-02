@@ -1,5 +1,10 @@
+import DashboardShell from "@/components/DashboardShell";
 import TransactionsView from "@/components/TransactionsView";
 
 export default function Home() {
-  return <TransactionsView />;
+  return (
+    <DashboardShell>
+      <TransactionsView />
+    </DashboardShell>
+  );
 }

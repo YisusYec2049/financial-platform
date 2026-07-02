@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import Link from "next/link";
 import * as XLSX from "xlsx";
+import { useSidebar } from "@/components/SidebarContext";
 
 type Transaction = {
   id: string;
@@ -20,6 +22,7 @@ type Transaction = {
 };
 
 export default function TransactionsView() {
+  const { width: sidebarWidth }           = useSidebar();
   const [data, setData]                   = useState<Transaction[]>([]);
   const [total, setTotal]                 = useState(0);
   const [page, setPage]                   = useState(1);
@@ -302,6 +305,17 @@ export default function TransactionsView() {
           )}
         </div>
         <div className="flex gap-2">
+          {/* Cruce de Cartera */}
+          <Link
+            href="/cruce"
+            className="flex items-center gap-1.5 border border-gray-300 text-gray-700 text-sm px-3 py-1.5 rounded-lg hover:bg-gray-50 active:scale-95 transition-all duration-150"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4" />
+            </svg>
+            Cruce de Cartera
+          </Link>
+
           {/* Dropdown de descarga */}
           <div ref={dropdownRef} className="relative">
             <button
@@ -513,8 +527,8 @@ export default function TransactionsView() {
       {/* Scrollbar horizontal fijo en la parte inferior de la pantalla */}
       <div
         ref={fixedScrollRef}
-        className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-200"
-        style={{ overflowX: "scroll", overflowY: "hidden", height: 20 }}
+        className="fixed bottom-0 right-0 z-50 bg-white border-t border-gray-200"
+        style={{ left: sidebarWidth, overflowX: "scroll", overflowY: "hidden", height: 20 }}
       >
         <div style={{ width: tableWidth, height: 1 }} />
       </div>
