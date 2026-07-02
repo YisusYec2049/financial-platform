@@ -12,6 +12,19 @@
   --font-mono: var(--font-geist-mono);
 }
 
+@theme {
+  --color-brand-50: #eff6ff;
+  --color-brand-100: #dbeafe;
+  --color-brand-200: #bfdbfe;
+  --color-brand-300: #93c5fd;
+  --color-brand-400: #60a5fa;
+  --color-brand-500: #3b82f6;
+  --color-brand-600: #1d4ed8;
+  --color-brand-700: #1e40af;
+  --color-brand-800: #1e3a8a;
+  --color-brand-900: #172554;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0a0a0a;

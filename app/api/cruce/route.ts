@@ -8,10 +8,11 @@ export async function GET(req: NextRequest) {
   if (response) return response;
 
   const { searchParams } = new URL(req.url);
-  const search   = searchParams.get("search")?.slice(0, 100) || "";
-  const page     = Math.max(1, parseInt(searchParams.get("page") || "1"));
-  const pageSize = 100;
-  const offset   = (page - 1) * pageSize;
+  const search        = searchParams.get("search")?.slice(0, 100) || "";
+  const paymentMethod = searchParams.get("payment_method")?.slice(0, 100) || "";
+  const page          = Math.max(1, parseInt(searchParams.get("page") || "1"));
+  const pageSize      = 100;
+  const offset        = (page - 1) * pageSize;
 
   const supabase = createAdminClient();
   let query = supabase
@@ -22,6 +23,14 @@ export async function GET(req: NextRequest) {
     query = query.or(
       `identification.ilike.%${search}%,transaction_code_1.ilike.%${search}%,email.ilike.%${search}%`
     );
+  }
+
+  if (paymentMethod) {
+    if (paymentMethod.endsWith("%")) {
+      query = query.ilike("payment_method", paymentMethod);
+    } else {
+      query = query.eq("payment_method", paymentMethod);
+    }
   }
 
   query = query
@@ -35,7 +44,7 @@ export async function GET(req: NextRequest) {
   logAudit({
     user_email: user.email ?? "unknown",
     action: "query",
-    filters: { search, page, view: "cruce" },
+    filters: { search, paymentMethod, page, view: "cruce" },
     result_count: count ?? 0,
   });
 

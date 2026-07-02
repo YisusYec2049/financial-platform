@@ -11,37 +11,27 @@ const NAV_ITEMS = [
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const { collapsed, toggle } = useSidebar();
-
-  if (collapsed) {
-    return (
-      <div className="w-10 shrink-0 border-r border-gray-200 bg-white flex items-start justify-center pt-4">
-        <button
-          onClick={toggle}
-          aria-label="Mostrar menú"
-          className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
-        </button>
-      </div>
-    );
-  }
+  const { collapsed, setCollapsed } = useSidebar();
 
   return (
-    <aside className="w-56 shrink-0 bg-white border-r border-gray-200 min-h-screen flex flex-col">
-      <div className="px-4 py-4 border-b border-gray-100 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-gray-900">Plataforma Financiera</h2>
-        <button
-          onClick={toggle}
-          aria-label="Ocultar menú"
-          className="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+    <aside
+      onMouseEnter={() => setCollapsed(false)}
+      onMouseLeave={() => setCollapsed(true)}
+      className={`shrink-0 bg-brand-800 min-h-screen flex flex-col overflow-hidden transition-all duration-300 ease-in-out ${
+        collapsed ? "w-10" : "w-56"
+      }`}
+    >
+      <div className="px-3 py-4 border-b border-brand-700 flex items-center gap-2">
+        <svg className="w-4 h-4 shrink-0 text-blue-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+        <h2
+          className={`text-sm font-semibold text-white whitespace-nowrap transition-opacity duration-200 ${
+            collapsed ? "opacity-0 duration-100" : "opacity-100 delay-150"
+          }`}
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
-        </button>
+          Plataforma Financiera
+        </h2>
       </div>
       <nav className="flex-1 px-2 py-3 space-y-1">
         {NAV_ITEMS.map((item) => {
@@ -50,11 +40,17 @@ export default function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
-              className={`block px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                active ? "bg-gray-900 text-white" : "text-gray-600 hover:bg-gray-100"
+              className={`block px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
+                active ? "bg-white text-brand-700 shadow-sm" : "text-blue-100 hover:text-white hover:bg-brand-700"
               }`}
             >
-              {item.label}
+              <span
+                className={`transition-opacity duration-200 ${
+                  collapsed ? "opacity-0 duration-100" : "opacity-100 delay-150"
+                }`}
+              >
+                {item.label}
+              </span>
             </Link>
           );
         })}

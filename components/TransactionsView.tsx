@@ -293,7 +293,7 @@ export default function TransactionsView() {
       {/* Header */}
       <div className="bg-white border-b px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold text-gray-900">Transacciones consolidadas</h1>
+          <h1 className="text-xl font-semibold text-brand-800">Transacciones consolidadas</h1>
           <span className="flex items-center gap-1.5 bg-green-100 text-green-700 text-xs font-medium px-2.5 py-1 rounded-full">
             <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
             En vivo
@@ -308,7 +308,7 @@ export default function TransactionsView() {
           {/* Cruce de Cartera */}
           <Link
             href="/cruce"
-            className="flex items-center gap-1.5 border border-gray-300 text-gray-700 text-sm px-3 py-1.5 rounded-lg hover:bg-gray-50 active:scale-95 transition-all duration-150"
+            className="flex items-center gap-1.5 border border-brand-700 text-brand-700 text-sm px-3 py-1.5 rounded-lg hover:bg-brand-50 active:scale-95 transition-all duration-150"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4" />
@@ -321,7 +321,7 @@ export default function TransactionsView() {
             <button
               onClick={() => setDropdownOpen((o) => !o)}
               disabled={loading}
-              className="flex items-center gap-1.5 bg-gray-900 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-gray-700 active:scale-95 transition-all duration-150 disabled:opacity-50"
+              className="flex items-center gap-1.5 bg-brand-700 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-brand-800 active:scale-95 transition-all duration-150 disabled:opacity-50"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -374,13 +374,13 @@ export default function TransactionsView() {
               placeholder="Buscar por documento, código transacción 1 o correo..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg pl-9 pr-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400"
+              className="w-full border border-gray-300 rounded-lg pl-9 pr-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
             />
           </div>
           <select
             value={paymentMethod}
             onChange={(e) => { setPaymentMethod(e.target.value); setPage(1); }}
-            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-400 bg-white"
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
           >
             <option value="" className="text-gray-900">Todos los medios</option>
             {methods.map((m) => (
@@ -393,18 +393,18 @@ export default function TransactionsView() {
           <div className="flex items-center gap-2">
             <span className="font-medium">Fecha Registro</span>
             <input type="date" value={regFrom} onChange={(e) => { setRegFrom(e.target.value); setPage(1); }}
-              className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400" />
+              className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
             <span>→</span>
             <input type="date" value={regTo} onChange={(e) => { setRegTo(e.target.value); setPage(1); }}
-              className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400" />
+              className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
           </div>
           <div className="flex items-center gap-2">
             <span className="font-medium">Fecha Pago</span>
             <input type="date" value={payFrom} onChange={(e) => { setPayFrom(e.target.value); setPage(1); }}
-              className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400" />
+              className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
             <span>→</span>
             <input type="date" value={payTo} onChange={(e) => { setPayTo(e.target.value); setPage(1); }}
-              className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400" />
+              className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
           </div>
           {(search || paymentMethod || regFrom || regTo || payFrom || payTo) && (
             <button
@@ -432,7 +432,7 @@ export default function TransactionsView() {
         <div className="mx-6 mb-2">
           <button
             onClick={() => fetchData(1)}
-            className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-sm font-medium px-4 py-2 rounded-lg transition-all duration-150"
+            className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 active:scale-95 text-white text-sm font-medium px-4 py-2 rounded-lg transition-all duration-150"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -487,7 +487,7 @@ export default function TransactionsView() {
                   <td className="px-4 py-2.5 text-gray-700">{fmt(row.phone)}</td>
                   <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.payment_amount)}</td>
                   <td className="px-4 py-2.5">
-                    <span className="bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">
+                    <span className="bg-brand-50 text-brand-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">
                       {fmt(row.payment_method)}
                     </span>
                   </td>
@@ -510,7 +510,7 @@ export default function TransactionsView() {
                 const p = Math.max(1, Math.min(page - 2, totalPages - 4)) + i;
                 return (
                   <button key={p} onClick={() => handlePage(p)}
-                    className={`px-2 py-1 border rounded hover:bg-gray-100 active:scale-95 transition-all duration-150 ${p === page ? "bg-gray-900 text-white border-gray-900" : ""}`}>
+                    className={`px-2 py-1 border rounded hover:bg-gray-100 active:scale-95 transition-all duration-150 ${p === page ? "bg-brand-700 text-white border-brand-700" : ""}`}>
                     {p}
                   </button>
                 );
@@ -527,7 +527,7 @@ export default function TransactionsView() {
       {/* Scrollbar horizontal fijo en la parte inferior de la pantalla */}
       <div
         ref={fixedScrollRef}
-        className="fixed bottom-0 right-0 z-50 bg-white border-t border-gray-200"
+        className="fixed bottom-0 right-0 z-50 bg-white border-t border-gray-200 transition-all duration-300 ease-in-out"
         style={{ left: sidebarWidth, overflowX: "scroll", overflowY: "hidden", height: 20 }}
       >
         <div style={{ width: tableWidth, height: 1 }} />

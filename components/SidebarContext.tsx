@@ -7,20 +7,20 @@ const COLLAPSED_WIDTH = 40;
 
 type SidebarContextValue = {
   collapsed: boolean;
-  toggle: () => void;
+  setCollapsed: (collapsed: boolean) => void;
   width: number;
 };
 
 const SidebarContext = createContext<SidebarContextValue | null>(null);
 
 export function SidebarProvider({ children }: { children: ReactNode }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
 
   return (
     <SidebarContext.Provider
       value={{
         collapsed,
-        toggle: () => setCollapsed((c) => !c),
+        setCollapsed,
         width: collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH,
       }}
     >

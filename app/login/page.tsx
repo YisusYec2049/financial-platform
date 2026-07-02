@@ -30,16 +30,16 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 w-full max-w-sm p-8">
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 w-full max-w-sm p-8">
         <div className="mb-8">
-          <h1 className="text-xl font-semibold text-gray-900">Iniciar sesión</h1>
-          <p className="text-sm text-gray-500 mt-1">Acceso exclusivo para miembros del equipo</p>
+          <h1 className="text-xl font-semibold text-brand-800">Iniciar sesión</h1>
+          <p className="text-sm text-slate-500 mt-1">Acceso exclusivo para miembros del equipo</p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-slate-700 mb-1">
               Correo electrónico
             </label>
             <input
@@ -47,13 +47,13 @@ export default function LoginPage() {
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-400"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
               placeholder="tu@empresa.com"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-slate-700 mb-1">
               Contraseña
             </label>
             <input
@@ -61,7 +61,7 @@ export default function LoginPage() {
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-400"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
               placeholder="••••••••"
             />
           </div>
@@ -75,7 +75,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-gray-900 text-white text-sm font-medium py-2 rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-50"
+            className="w-full bg-brand-700 text-white text-sm font-semibold py-2 rounded-lg hover:bg-brand-800 transition-colors disabled:opacity-50"
           >
             {loading ? "Iniciando sesión..." : "Iniciar sesión"}
           </button>

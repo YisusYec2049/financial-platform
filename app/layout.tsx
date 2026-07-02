@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Transacciones Consolidadas",
+  title: "Plataforma Financiera",
   description: "Plataforma financiera de pagos consolidados",
 };
 

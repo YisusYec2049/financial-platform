@@ -19,20 +19,44 @@ type CruceRow = {
 };
 
 export default function CruceView() {
-  const { width: sidebarWidth }     = useSidebar();
-  const [data, setData]             = useState<CruceRow[]>([]);
-  const [total, setTotal]           = useState(0);
-  const [page, setPage]             = useState(1);
-  const [loading, setLoading]       = useState(false);
-  const [search, setSearch]         = useState("");
-  const [fetchError, setFetchError] = useState("");
-  const [tableWidth, setTableWidth] = useState(0);
-  const searchTimeout               = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const abortControllerRef          = useRef<AbortController | null>(null);
-  const tableContainerRef           = useRef<HTMLDivElement>(null);
-  const fixedScrollRef              = useRef<HTMLDivElement>(null);
+  const { width: sidebarWidth }           = useSidebar();
+  const [data, setData]                   = useState<CruceRow[]>([]);
+  const [total, setTotal]                 = useState(0);
+  const [page, setPage]                   = useState(1);
+  const [loading, setLoading]             = useState(false);
+  const [search, setSearch]               = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("");
+  const [methods, setMethods]             = useState<{ label: string; value: string }[]>([]);
+  const [fetchError, setFetchError]       = useState("");
+  const [tableWidth, setTableWidth]       = useState(0);
+  const searchTimeout                     = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortControllerRef                = useRef<AbortController | null>(null);
+  const tableContainerRef                 = useRef<HTMLDivElement>(null);
+  const fixedScrollRef                    = useRef<HTMLDivElement>(null);
 
   const PAGE_SIZE = 100;
+
+  const fetchMethods = useCallback(async () => {
+    const res  = await fetch("/api/transactions/payment-methods");
+    const raw: string[] = await res.json();
+
+    // Agrupar WOMPI y Placetopay en una sola opción
+    const grouped: { label: string; value: string }[] = [];
+    let addedWompi      = false;
+    let addedPlacetopay = false;
+
+    for (const m of raw) {
+      if (m.toUpperCase().startsWith("WOMPI")) {
+        if (!addedWompi) { grouped.push({ label: "WOMPI", value: "WOMPI%" }); addedWompi = true; }
+      } else if (m.toLowerCase().startsWith("placetopay")) {
+        if (!addedPlacetopay) { grouped.push({ label: "Placetopay", value: "Placetopay%" }); addedPlacetopay = true; }
+      } else {
+        grouped.push({ label: m, value: m });
+      }
+    }
+
+    setMethods(grouped);
+  }, []);
 
   const fetchData = useCallback(async (currentPage = 1) => {
     if (abortControllerRef.current) abortControllerRef.current.abort();
@@ -42,7 +66,8 @@ export default function CruceView() {
     setLoading(true);
     setFetchError("");
     const params = new URLSearchParams();
-    if (search) params.set("search", search);
+    if (search)        params.set("search", search);
+    if (paymentMethod) params.set("payment_method", paymentMethod);
     params.set("page", String(currentPage));
 
     try {
@@ -57,7 +82,11 @@ export default function CruceView() {
     } finally {
       setLoading(false);
     }
-  }, [search]);
+  }, [search, paymentMethod]);
+
+  useEffect(() => {
+    fetchMethods();
+  }, [fetchMethods]);
 
   useEffect(() => {
     if (searchTimeout.current) clearTimeout(searchTimeout.current);
@@ -66,7 +95,7 @@ export default function CruceView() {
       fetchData(1);
     }, 400);
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
-  }, [search, fetchData]);
+  }, [search, paymentMethod, fetchData]);
 
   useEffect(() => {
     const tableEl = tableContainerRef.current;
@@ -112,25 +141,45 @@ export default function CruceView() {
     <div className="min-h-screen bg-gray-50">
       <div className="bg-white border-b px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold text-gray-900">Cruce de Cartera</h1>
+          <h1 className="text-xl font-semibold text-brand-800">Cruce de Cartera</h1>
           <span className="text-xs text-amber-700 bg-amber-100 px-2.5 py-1 rounded-full font-medium">
             En construcción — INCP y CORREO(2) implementados, resto pendiente
           </span>
         </div>
       </div>
 
-      <div className="bg-white border-b px-6 py-3">
-        <div className="relative w-80">
-          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
-          </svg>
-          <input
-            type="text"
-            placeholder="Buscar por documento, código transacción o correo..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg pl-9 pr-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400"
-          />
+      <div className="bg-white border-b px-6 py-3 space-y-3">
+        <div className="flex gap-3 flex-wrap items-center">
+          <div className="relative w-80">
+            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+            </svg>
+            <input
+              type="text"
+              placeholder="Buscar por documento, código transacción o correo..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg pl-9 pr-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+            />
+          </div>
+          <select
+            value={paymentMethod}
+            onChange={(e) => { setPaymentMethod(e.target.value); setPage(1); }}
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+          >
+            <option value="" className="text-gray-900">Todos los bancos</option>
+            {methods.map((m) => (
+              <option key={m.value} value={m.value} className="text-gray-900">{m.label}</option>
+            ))}
+          </select>
+          {(search || paymentMethod) && (
+            <button
+              onClick={() => { setSearch(""); setPaymentMethod(""); setPage(1); }}
+              className="text-red-500 hover:text-red-700 text-xs underline"
+            >
+              Limpiar filtros
+            </button>
+          )}
         </div>
       </div>
 
@@ -185,7 +234,7 @@ export default function CruceView() {
                   <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_2)}</td>
                   <td className="px-4 py-2.5 text-gray-500 text-xs">{fmt(row.email)}</td>
                   <td className="px-4 py-2.5">
-                    <span className="bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">
+                    <span className="bg-brand-50 text-brand-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">
                       {fmt(row.payment_method)}
                     </span>
                   </td>
@@ -212,7 +261,7 @@ export default function CruceView() {
                 const p = Math.max(1, Math.min(page - 2, totalPages - 4)) + i;
                 return (
                   <button key={p} onClick={() => handlePage(p)}
-                    className={`px-2 py-1 border rounded hover:bg-gray-100 active:scale-95 transition-all duration-150 ${p === page ? "bg-gray-900 text-white border-gray-900" : ""}`}>
+                    className={`px-2 py-1 border rounded hover:bg-gray-100 active:scale-95 transition-all duration-150 ${p === page ? "bg-brand-700 text-white border-brand-700" : ""}`}>
                     {p}
                   </button>
                 );
@@ -228,7 +277,7 @@ export default function CruceView() {
 
       <div
         ref={fixedScrollRef}
-        className="fixed bottom-0 right-0 z-50 bg-white border-t border-gray-200"
+        className="fixed bottom-0 right-0 z-50 bg-white border-t border-gray-200 transition-all duration-300 ease-in-out"
         style={{ left: sidebarWidth, overflowX: "scroll", overflowY: "hidden", height: 20 }}
       >
         <div style={{ width: tableWidth, height: 1 }} />
