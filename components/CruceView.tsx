@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useSidebar } from "@/components/SidebarContext";
+import CruceExcepcionesView from "@/components/CruceExcepcionesView";
 
 type CruceRow = {
   matching_key: string;
@@ -20,6 +21,7 @@ type CruceRow = {
 
 export default function CruceView() {
   const { width: sidebarWidth }           = useSidebar();
+  const [tab, setTab]                     = useState<"todas" | "excepciones">("todas");
   const [data, setData]                   = useState<CruceRow[]>([]);
   const [total, setTotal]                 = useState(0);
   const [page, setPage]                   = useState(1);
@@ -148,6 +150,33 @@ export default function CruceView() {
         </div>
       </div>
 
+      <div className="bg-white border-b px-6 flex gap-1">
+        <button
+          onClick={() => setTab("todas")}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors duration-150 ${
+            tab === "todas"
+              ? "border-brand-700 text-brand-800"
+              : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          Todas
+        </button>
+        <button
+          onClick={() => setTab("excepciones")}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors duration-150 ${
+            tab === "excepciones"
+              ? "border-brand-700 text-brand-800"
+              : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          Excepciones
+        </button>
+      </div>
+
+      {tab === "excepciones" ? (
+        <CruceExcepcionesView />
+      ) : (
+      <>
       <div className="bg-white border-b px-6 py-3 space-y-3">
         <div className="flex gap-3 flex-wrap items-center">
           <div className="relative w-80">
@@ -283,6 +312,8 @@ export default function CruceView() {
         <div style={{ width: tableWidth, height: 1 }} />
       </div>
       <div style={{ height: 20 }} />
+      </>
+      )}
     </div>
   );
 }
