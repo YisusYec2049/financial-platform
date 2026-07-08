@@ -10,6 +10,8 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const search        = searchParams.get("search")?.slice(0, 100) || "";
   const paymentMethod = searchParams.get("payment_method")?.slice(0, 100) || "";
+  const payFrom       = searchParams.get("pay_from") || "";
+  const payTo         = searchParams.get("pay_to") || "";
   const page          = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const pageSize      = 100;
   const offset        = (page - 1) * pageSize;
@@ -17,7 +19,8 @@ export async function GET(req: NextRequest) {
   const supabase = createAdminClient();
   let query = supabase
     .from("cruce_cartera")
-    .select("*", { count: "exact" });
+    .select("*", { count: "exact" })
+    .neq("estado_cruce", "pendiente");
 
   if (search) {
     query = query.or(
@@ -33,6 +36,9 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  if (payFrom) query = query.gte("payment_date", payFrom);
+  if (payTo)   query = query.lte("payment_date", payTo);
+
   query = query
     .order("payment_date", { ascending: false })
     .range(offset, offset + pageSize - 1);
@@ -44,7 +50,7 @@ export async function GET(req: NextRequest) {
   logAudit({
     user_email: user.email ?? "unknown",
     action: "query",
-    filters: { search, paymentMethod, page, view: "cruce" },
+    filters: { search, paymentMethod, payFrom, payTo, page, view: "cruce" },
     result_count: count ?? 0,
   });
 

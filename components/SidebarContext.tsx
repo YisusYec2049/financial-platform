@@ -3,7 +3,7 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 
 const EXPANDED_WIDTH = 224;
-const COLLAPSED_WIDTH = 40;
+const COLLAPSED_WIDTH = 56;
 
 type SidebarContextValue = {
   collapsed: boolean;

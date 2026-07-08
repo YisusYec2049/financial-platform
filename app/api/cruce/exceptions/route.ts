@@ -12,6 +12,8 @@ export async function GET(req: NextRequest) {
   const excepcionMotivo = searchParams.get("excepcion_motivo")?.slice(0, 100) || "";
   const incpCorreo      = searchParams.get("incp_correo")?.slice(0, 100) || "";
   const paymentMethod   = searchParams.get("payment_method")?.slice(0, 100) || "";
+  const payFrom         = searchParams.get("pay_from") || "";
+  const payTo           = searchParams.get("pay_to") || "";
   const page            = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const pageSize        = 100;
   const offset          = (page - 1) * pageSize;
@@ -45,6 +47,9 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  if (payFrom) query = query.gte("payment_date", payFrom);
+  if (payTo)   query = query.lte("payment_date", payTo);
+
   query = query
     .order("payment_date", { ascending: false })
     .range(offset, offset + pageSize - 1);
@@ -56,7 +61,7 @@ export async function GET(req: NextRequest) {
   logAudit({
     user_email: user.email ?? "unknown",
     action: "query",
-    filters: { search, excepcionMotivo, incpCorreo, paymentMethod, page, view: "cruce_excepciones" },
+    filters: { search, excepcionMotivo, incpCorreo, paymentMethod, payFrom, payTo, page, view: "cruce_excepciones" },
     result_count: count ?? 0,
   });
 

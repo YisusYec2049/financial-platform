@@ -28,6 +28,8 @@ export default function CruceView() {
   const [loading, setLoading]             = useState(false);
   const [search, setSearch]               = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
+  const [payFrom, setPayFrom]             = useState("");
+  const [payTo, setPayTo]                 = useState("");
   const [methods, setMethods]             = useState<{ label: string; value: string }[]>([]);
   const [fetchError, setFetchError]       = useState("");
   const [tableWidth, setTableWidth]       = useState(0);
@@ -70,6 +72,8 @@ export default function CruceView() {
     const params = new URLSearchParams();
     if (search)        params.set("search", search);
     if (paymentMethod) params.set("payment_method", paymentMethod);
+    if (payFrom)        params.set("pay_from", payFrom);
+    if (payTo)          params.set("pay_to", payTo);
     params.set("page", String(currentPage));
 
     try {
@@ -84,7 +88,7 @@ export default function CruceView() {
     } finally {
       setLoading(false);
     }
-  }, [search, paymentMethod]);
+  }, [search, paymentMethod, payFrom, payTo]);
 
   useEffect(() => {
     fetchMethods();
@@ -97,7 +101,7 @@ export default function CruceView() {
       fetchData(1);
     }, 400);
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
-  }, [search, paymentMethod, fetchData]);
+  }, [search, paymentMethod, payFrom, payTo, fetchData]);
 
   useEffect(() => {
     const tableEl = tableContainerRef.current;
@@ -139,48 +143,48 @@ export default function CruceView() {
   const fmtMonto = (v: number | null) =>
     v != null ? new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(v) : "—";
 
+  const PANEL = "bg-white rounded-2xl border border-black/[0.06] shadow-[0_1px_1px_rgba(0,0,0,0.03),0_8px_20px_-12px_rgba(0,0,0,0.15)]";
+  const INPUT = "border border-black/10 bg-gray-50/60 rounded-xl px-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors";
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="bg-white border-b px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold text-brand-800">Cruce de Cartera</h1>
-          <span className="text-xs text-amber-700 bg-amber-100 px-2.5 py-1 rounded-full font-medium">
+    <div className="p-5 pb-8 space-y-4">
+      <div className={`${PANEL} px-6 py-4 flex items-center justify-between flex-wrap gap-3`}>
+        <div className="flex items-center gap-3 flex-wrap">
+          <h1 className="text-lg font-semibold text-gray-900">Cruce de Cartera</h1>
+          <span className="text-xs text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full font-medium">
             En construcción — INCP y CORREO(2) implementados, resto pendiente
           </span>
         </div>
-      </div>
 
-      <div className="bg-white border-b px-6 flex gap-1">
-        <button
-          onClick={() => setTab("todas")}
-          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors duration-150 ${
-            tab === "todas"
-              ? "border-brand-700 text-brand-800"
-              : "border-transparent text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          Todas
-        </button>
-        <button
-          onClick={() => setTab("excepciones")}
-          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors duration-150 ${
-            tab === "excepciones"
-              ? "border-brand-700 text-brand-800"
-              : "border-transparent text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          Excepciones
-        </button>
+        {/* Segmented control */}
+        <div className="inline-flex bg-gray-100 rounded-xl p-1 gap-1">
+          <button
+            onClick={() => setTab("todas")}
+            className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-all duration-150 ${
+              tab === "todas" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            Todas
+          </button>
+          <button
+            onClick={() => setTab("excepciones")}
+            className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-all duration-150 ${
+              tab === "excepciones" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            Excepciones
+          </button>
+        </div>
       </div>
 
       {tab === "excepciones" ? (
         <CruceExcepcionesView />
       ) : (
       <>
-      <div className="bg-white border-b px-6 py-3 space-y-3">
+      <div className={`${PANEL} px-6 py-4 space-y-3`}>
         <div className="flex gap-3 flex-wrap items-center">
           <div className="relative w-80">
-            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
             </svg>
             <input
@@ -188,22 +192,33 @@ export default function CruceView() {
               placeholder="Buscar por documento, código transacción o correo..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg pl-9 pr-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+              className={`w-full ${INPUT} rounded-full pl-9 pr-3.5`}
             />
           </div>
           <select
             value={paymentMethod}
             onChange={(e) => { setPaymentMethod(e.target.value); setPage(1); }}
-            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+            className={INPUT}
           >
             <option value="" className="text-gray-900">Todos los bancos</option>
             {methods.map((m) => (
               <option key={m.value} value={m.value} className="text-gray-900">{m.label}</option>
             ))}
           </select>
-          {(search || paymentMethod) && (
+        </div>
+
+        <div className="flex gap-6 flex-wrap text-sm text-gray-600 items-center">
+          <div className="flex items-center gap-2">
+            <span className="font-medium">Fecha Pago</span>
+            <input type="date" value={payFrom} onChange={(e) => { setPayFrom(e.target.value); setPage(1); }}
+              className={`${INPUT} py-1`} />
+            <span>→</span>
+            <input type="date" value={payTo} onChange={(e) => { setPayTo(e.target.value); setPage(1); }}
+              className={`${INPUT} py-1`} />
+          </div>
+          {(search || paymentMethod || payFrom || payTo) && (
             <button
-              onClick={() => { setSearch(""); setPaymentMethod(""); setPage(1); }}
+              onClick={() => { setSearch(""); setPaymentMethod(""); setPayFrom(""); setPayTo(""); setPage(1); }}
               className="text-red-500 hover:text-red-700 text-xs underline"
             >
               Limpiar filtros
@@ -212,93 +227,95 @@ export default function CruceView() {
         </div>
       </div>
 
-      <div className="px-6 py-2 text-sm text-gray-500">
+      <div className="px-1 text-sm text-gray-500">
         {loading ? "Cargando..." : `${total.toLocaleString("es-CO")} registros encontrados`}
       </div>
 
       {fetchError && (
-        <div className="mx-6 mb-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+        <div className="text-sm text-red-600 bg-red-50 border border-red-200/80 rounded-xl px-3.5 py-2">
           {fetchError}
         </div>
       )}
 
-      <div ref={tableContainerRef} className="px-6 pb-6 overflow-x-auto">
-        <table className="w-full text-sm border-collapse bg-white rounded-lg shadow-sm overflow-hidden">
-          <thead>
-            <tr className="bg-gray-100 text-gray-600 text-left">
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Documento</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Fecha Pago</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 1</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 2</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Correo</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Medio de Pago</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Programa</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Teléfono</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Matrícula</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">INCP</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Correo(2)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && data.length === 0 ? (
-              Array.from({ length: 8 }).map((_, i) => (
-                <tr key={i} className="border-t border-gray-100">
-                  {Array.from({ length: 11 }).map((_, j) => (
-                    <td key={j} className="px-4 py-3">
-                      <div className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * j * 7) % 40}%` }} />
-                    </td>
-                  ))}
-                </tr>
-              ))
-            ) : data.length === 0 ? (
-              <tr>
-                <td colSpan={11} className="text-center py-12 text-gray-400">No hay registros</td>
+      <div className={`${PANEL} overflow-hidden`}>
+        <div ref={tableContainerRef} className="overflow-x-auto">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="bg-gray-50/80 text-gray-500 text-left">
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Documento</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Fecha Pago</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 1</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 2</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Correo</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Medio de Pago</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Programa</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Teléfono</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Matrícula</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">INCP</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Correo(2)</th>
               </tr>
-            ) : (
-              data.map((row) => (
-                <tr key={row.matching_key} className="border-t border-gray-100 hover:bg-gray-50 transition-colors duration-100">
-                  <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.identification)}</td>
-                  <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.payment_date)}</td>
-                  <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_1)}</td>
-                  <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_2)}</td>
-                  <td className="px-4 py-2.5 text-gray-500 text-xs">{fmt(row.email)}</td>
-                  <td className="px-4 py-2.5">
-                    <span className="bg-brand-50 text-brand-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">
-                      {fmt(row.payment_method)}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5 text-gray-700">{fmt(row.program)}</td>
-                  <td className="px-4 py-2.5 text-gray-700">{fmt(row.phone)}</td>
-                  <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.payment_amount)}</td>
-                  <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.incp)}</td>
-                  <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.correo_2)}</td>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {loading && data.length === 0 ? (
+                Array.from({ length: 8 }).map((_, i) => (
+                  <tr key={i}>
+                    {Array.from({ length: 11 }).map((_, j) => (
+                      <td key={j} className="px-4 py-3">
+                        <div className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * j * 7) % 40}%` }} />
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              ) : data.length === 0 ? (
+                <tr>
+                  <td colSpan={11} className="text-center py-12 text-gray-400">No hay registros</td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : (
+                data.map((row) => (
+                  <tr key={row.matching_key} className="hover:bg-gray-50/70 transition-colors duration-100">
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.identification)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.payment_date)}</td>
+                    <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_1)}</td>
+                    <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_2)}</td>
+                    <td className="px-4 py-2.5 text-gray-500 text-xs">{fmt(row.email)}</td>
+                    <td className="px-4 py-2.5">
+                      <span className="bg-brand-50 text-brand-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">
+                        {fmt(row.payment_method)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-gray-700">{fmt(row.program)}</td>
+                    <td className="px-4 py-2.5 text-gray-700">{fmt(row.phone)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.payment_amount)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.incp)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.correo_2)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
 
         {totalPages > 1 && (
-          <div className="flex items-center justify-between mt-4 text-sm text-gray-600">
+          <div className="flex items-center justify-between px-6 py-3 border-t border-black/[0.06] text-sm text-gray-600">
             <span>Página {page} de {totalPages}</span>
             <div className="flex gap-1">
               <button onClick={() => handlePage(1)} disabled={page === 1}
-                className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">«</button>
+                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">«</button>
               <button onClick={() => handlePage(page - 1)} disabled={page === 1}
-                className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">‹</button>
+                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">‹</button>
               {[...Array(Math.min(5, totalPages))].map((_, i) => {
                 const p = Math.max(1, Math.min(page - 2, totalPages - 4)) + i;
                 return (
                   <button key={p} onClick={() => handlePage(p)}
-                    className={`px-2 py-1 border rounded hover:bg-gray-100 active:scale-95 transition-all duration-150 ${p === page ? "bg-brand-700 text-white border-brand-700" : ""}`}>
+                    className={`min-w-7 h-7 px-2 rounded-full hover:bg-gray-100 active:scale-95 transition-all duration-150 ${p === page ? "bg-brand-600 text-white shadow-sm hover:bg-brand-600" : ""}`}>
                     {p}
                   </button>
                 );
               })}
               <button onClick={() => handlePage(page + 1)} disabled={page === totalPages}
-                className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">›</button>
+                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">›</button>
               <button onClick={() => handlePage(totalPages)} disabled={page === totalPages}
-                className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">»</button>
+                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">»</button>
             </div>
           </div>
         )}
@@ -306,12 +323,11 @@ export default function CruceView() {
 
       <div
         ref={fixedScrollRef}
-        className="fixed bottom-0 right-0 z-50 bg-white border-t border-gray-200 transition-all duration-300 ease-in-out"
+        className="fixed bottom-0 right-0 z-50 bg-white border-t border-black/[0.06] transition-all duration-300 ease-in-out"
         style={{ left: sidebarWidth, overflowX: "scroll", overflowY: "hidden", height: 20 }}
       >
         <div style={{ width: tableWidth, height: 1 }} />
       </div>
-      <div style={{ height: 20 }} />
       </>
       )}
     </div>

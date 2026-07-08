@@ -288,13 +288,16 @@ export default function TransactionsView() {
   const fmtMonto = (v: number | null) =>
     v != null ? new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(v) : "—";
 
+  const PANEL = "bg-white rounded-2xl border border-black/[0.06] shadow-[0_1px_1px_rgba(0,0,0,0.03),0_8px_20px_-12px_rgba(0,0,0,0.15)]";
+  const INPUT = "border border-black/10 bg-gray-50/60 rounded-xl px-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors";
+
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="p-5 pb-8 space-y-4">
       {/* Header */}
-      <div className="bg-white border-b px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold text-brand-800">Transacciones consolidadas</h1>
-          <span className="flex items-center gap-1.5 bg-green-100 text-green-700 text-xs font-medium px-2.5 py-1 rounded-full">
+      <div className={`${PANEL} px-6 py-4 flex items-center justify-between flex-wrap gap-3`}>
+        <div className="flex items-center gap-3 flex-wrap">
+          <h1 className="text-lg font-semibold text-gray-900">Transacciones consolidadas</h1>
+          <span className="flex items-center gap-1.5 bg-green-50 text-green-700 text-xs font-medium px-2.5 py-1 rounded-full">
             <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
             En vivo
           </span>
@@ -308,7 +311,7 @@ export default function TransactionsView() {
           {/* Cruce de Cartera */}
           <Link
             href="/cruce"
-            className="flex items-center gap-1.5 border border-brand-700 text-brand-700 text-sm px-3 py-1.5 rounded-lg hover:bg-brand-50 active:scale-95 transition-all duration-150"
+            className="flex items-center gap-1.5 border border-black/10 text-brand-700 text-sm px-3.5 py-1.5 rounded-full hover:bg-brand-50 active:scale-95 transition-all duration-150"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4" />
@@ -321,7 +324,7 @@ export default function TransactionsView() {
             <button
               onClick={() => setDropdownOpen((o) => !o)}
               disabled={loading}
-              className="flex items-center gap-1.5 bg-brand-700 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-brand-800 active:scale-95 transition-all duration-150 disabled:opacity-50"
+              className="flex items-center gap-1.5 bg-brand-600 text-white text-sm px-3.5 py-1.5 rounded-full shadow-sm hover:bg-brand-700 active:scale-95 transition-all duration-150 disabled:opacity-50"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -332,16 +335,16 @@ export default function TransactionsView() {
               </svg>
             </button>
             {dropdownOpen && (
-              <div className="absolute right-0 mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-50">
+              <div className="absolute right-0 mt-1.5 w-44 bg-white border border-black/[0.06] rounded-xl shadow-[0_8px_24px_-8px_rgba(0,0,0,0.2)] z-50 overflow-hidden py-1">
                 <button
                   onClick={() => { setDropdownOpen(false); downloadExcel(); }}
-                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-t-lg"
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
                 >
                   Descargar Excel
                 </button>
                 <button
                   onClick={downloadCSV}
-                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-b-lg border-t border-gray-100"
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
                 >
                   Descargar CSV
                 </button>
@@ -352,7 +355,7 @@ export default function TransactionsView() {
           {/* Cerrar sesión */}
           <button
             onClick={handleLogout}
-            className="flex items-center gap-1.5 bg-red-600 text-white text-sm px-3 py-1.5 rounded-lg hover:bg-red-700 active:scale-95 transition-all duration-150"
+            className="flex items-center gap-1.5 bg-red-500 text-white text-sm px-3.5 py-1.5 rounded-full shadow-sm hover:bg-red-600 active:scale-95 transition-all duration-150"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
@@ -363,10 +366,10 @@ export default function TransactionsView() {
       </div>
 
       {/* Filtros */}
-      <div className="bg-white border-b px-6 py-3 space-y-3">
+      <div className={`${PANEL} px-6 py-4 space-y-3`}>
         <div className="flex gap-3 flex-wrap items-center">
           <div className="relative w-80">
-            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
             </svg>
             <input
@@ -374,13 +377,13 @@ export default function TransactionsView() {
               placeholder="Buscar por documento, código transacción 1 o correo..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg pl-9 pr-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+              className={`w-full ${INPUT} rounded-full pl-9 pr-3.5`}
             />
           </div>
           <select
             value={paymentMethod}
             onChange={(e) => { setPaymentMethod(e.target.value); setPage(1); }}
-            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+            className={INPUT}
           >
             <option value="" className="text-gray-900">Todos los medios</option>
             {methods.map((m) => (
@@ -393,18 +396,18 @@ export default function TransactionsView() {
           <div className="flex items-center gap-2">
             <span className="font-medium">Fecha Registro</span>
             <input type="date" value={regFrom} onChange={(e) => { setRegFrom(e.target.value); setPage(1); }}
-              className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+              className={`${INPUT} py-1`} />
             <span>→</span>
             <input type="date" value={regTo} onChange={(e) => { setRegTo(e.target.value); setPage(1); }}
-              className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+              className={`${INPUT} py-1`} />
           </div>
           <div className="flex items-center gap-2">
             <span className="font-medium">Fecha Pago</span>
             <input type="date" value={payFrom} onChange={(e) => { setPayFrom(e.target.value); setPage(1); }}
-              className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+              className={`${INPUT} py-1`} />
             <span>→</span>
             <input type="date" value={payTo} onChange={(e) => { setPayTo(e.target.value); setPage(1); }}
-              className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+              className={`${INPUT} py-1`} />
           </div>
           {(search || paymentMethod || regFrom || regTo || payFrom || payTo) && (
             <button
@@ -418,107 +421,107 @@ export default function TransactionsView() {
       </div>
 
       {/* Conteo */}
-      <div className="px-6 py-2 text-sm text-gray-500">
+      <div className="px-1 text-sm text-gray-500">
         {loading ? "Cargando..." : `${total.toLocaleString("es-CO")} registros encontrados`}
       </div>
 
       {fetchError && (
-        <div className="mx-6 mb-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+        <div className="text-sm text-red-600 bg-red-50 border border-red-200/80 rounded-xl px-3.5 py-2">
           {fetchError}
         </div>
       )}
 
       {newRecords && (
-        <div className="mx-6 mb-2">
-          <button
-            onClick={() => fetchData(1)}
-            className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 active:scale-95 text-white text-sm font-medium px-4 py-2 rounded-lg transition-all duration-150"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            Hay nuevos registros — clic para actualizar
-          </button>
-        </div>
+        <button
+          onClick={() => fetchData(1)}
+          className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 active:scale-95 text-white text-sm font-medium px-4 py-2 rounded-full shadow-sm transition-all duration-150"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          Hay nuevos registros — clic para actualizar
+        </button>
       )}
 
       {/* Tabla */}
-      <div ref={tableContainerRef} className="px-6 pb-6 overflow-x-auto">
-        <table className="w-full text-sm border-collapse bg-white rounded-lg shadow-sm overflow-hidden">
-          <thead>
-            <tr className="bg-gray-100 text-gray-600 text-left">
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Fecha Registro</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Documento</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Fecha Pago</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 1</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 2</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Correo</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Programa</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Teléfono</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Valor</th>
-              <th className="px-4 py-3 font-medium whitespace-nowrap">Medio de Pago</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && data.length === 0 ? (
-              Array.from({ length: 8 }).map((_, i) => (
-                <tr key={i} className="border-t border-gray-100">
-                  {Array.from({ length: 10 }).map((_, j) => (
-                    <td key={j} className="px-4 py-3">
-                      <div className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * j * 7) % 40}%` }} />
-                    </td>
-                  ))}
-                </tr>
-              ))
-            ) : data.length === 0 ? (
-              <tr>
-                <td colSpan={10} className="text-center py-12 text-gray-400">No hay registros</td>
+      <div className={`${PANEL} overflow-hidden`}>
+        <div ref={tableContainerRef} className="overflow-x-auto">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="bg-gray-50/80 text-gray-500 text-left">
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Fecha Registro</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Documento</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Fecha Pago</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 1</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 2</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Correo</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Programa</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Teléfono</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Valor</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Medio de Pago</th>
               </tr>
-            ) : (
-              data.map((row) => (
-                <tr key={row.id} className="border-t border-gray-100 hover:bg-gray-50 transition-colors duration-100">
-                  <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.registration_date)}</td>
-                  <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.identification)}</td>
-                  <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.payment_date)}</td>
-                  <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_1)}</td>
-                  <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_2)}</td>
-                  <td className="px-4 py-2.5 text-gray-500 text-xs">{fmt(row.email)}</td>
-                  <td className="px-4 py-2.5 text-gray-700">{fmt(row.program)}</td>
-                  <td className="px-4 py-2.5 text-gray-700">{fmt(row.phone)}</td>
-                  <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.payment_amount)}</td>
-                  <td className="px-4 py-2.5">
-                    <span className="bg-brand-50 text-brand-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">
-                      {fmt(row.payment_method)}
-                    </span>
-                  </td>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {loading && data.length === 0 ? (
+                Array.from({ length: 8 }).map((_, i) => (
+                  <tr key={i}>
+                    {Array.from({ length: 10 }).map((_, j) => (
+                      <td key={j} className="px-4 py-3">
+                        <div className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * j * 7) % 40}%` }} />
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              ) : data.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="text-center py-12 text-gray-400">No hay registros</td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : (
+                data.map((row) => (
+                  <tr key={row.id} className="hover:bg-gray-50/70 transition-colors duration-100">
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.registration_date)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.identification)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.payment_date)}</td>
+                    <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_1)}</td>
+                    <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_2)}</td>
+                    <td className="px-4 py-2.5 text-gray-500 text-xs">{fmt(row.email)}</td>
+                    <td className="px-4 py-2.5 text-gray-700">{fmt(row.program)}</td>
+                    <td className="px-4 py-2.5 text-gray-700">{fmt(row.phone)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.payment_amount)}</td>
+                    <td className="px-4 py-2.5">
+                      <span className="bg-brand-50 text-brand-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">
+                        {fmt(row.payment_method)}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
 
         {/* Paginación */}
         {totalPages > 1 && (
-          <div className="flex items-center justify-between mt-4 text-sm text-gray-600">
+          <div className="flex items-center justify-between px-6 py-3 border-t border-black/[0.06] text-sm text-gray-600">
             <span>Página {page} de {totalPages}</span>
             <div className="flex gap-1">
               <button onClick={() => handlePage(1)} disabled={page === 1}
-                className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">«</button>
+                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">«</button>
               <button onClick={() => handlePage(page - 1)} disabled={page === 1}
-                className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">‹</button>
+                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">‹</button>
               {[...Array(Math.min(5, totalPages))].map((_, i) => {
                 const p = Math.max(1, Math.min(page - 2, totalPages - 4)) + i;
                 return (
                   <button key={p} onClick={() => handlePage(p)}
-                    className={`px-2 py-1 border rounded hover:bg-gray-100 active:scale-95 transition-all duration-150 ${p === page ? "bg-brand-700 text-white border-brand-700" : ""}`}>
+                    className={`min-w-7 h-7 px-2 rounded-full hover:bg-gray-100 active:scale-95 transition-all duration-150 ${p === page ? "bg-brand-600 text-white shadow-sm hover:bg-brand-600" : ""}`}>
                     {p}
                   </button>
                 );
               })}
               <button onClick={() => handlePage(page + 1)} disabled={page === totalPages}
-                className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">›</button>
+                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">›</button>
               <button onClick={() => handlePage(totalPages)} disabled={page === totalPages}
-                className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">»</button>
+                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">»</button>
             </div>
           </div>
         )}
@@ -527,14 +530,11 @@ export default function TransactionsView() {
       {/* Scrollbar horizontal fijo en la parte inferior de la pantalla */}
       <div
         ref={fixedScrollRef}
-        className="fixed bottom-0 right-0 z-50 bg-white border-t border-gray-200 transition-all duration-300 ease-in-out"
+        className="fixed bottom-0 right-0 z-50 bg-white border-t border-black/[0.06] transition-all duration-300 ease-in-out"
         style={{ left: sidebarWidth, overflowX: "scroll", overflowY: "hidden", height: 20 }}
       >
         <div style={{ width: tableWidth, height: 1 }} />
       </div>
-
-      {/* Espaciado para que el contenido no quede tapado por la barra fija */}
-      <div style={{ height: 20 }} />
     </div>
   );
 }

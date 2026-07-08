@@ -30,16 +30,21 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 w-full max-w-sm p-8">
-        <div className="mb-8">
-          <h1 className="text-xl font-semibold text-brand-800">Iniciar sesión</h1>
-          <p className="text-sm text-slate-500 mt-1">Acceso exclusivo para miembros del equipo</p>
+    <div className="min-h-screen bg-[#f2f2f4] flex items-center justify-center px-4">
+      <div className="bg-white rounded-2xl shadow-[0_1px_1px_rgba(0,0,0,0.03),0_16px_40px_-16px_rgba(0,0,0,0.18)] border border-black/[0.06] w-full max-w-sm p-8">
+        <div className="mb-8 flex flex-col items-center text-center">
+          <div className="w-12 h-12 rounded-2xl bg-brand-600 shadow-sm flex items-center justify-center mb-4">
+            <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .672-3 1.5S10.343 11 12 11s3 .672 3 1.5-1.343 1.5-3 1.5m0-6V6m0 9v1.5M12 6v0a3 3 0 013 3M12 18a3 3 0 01-3-3" />
+            </svg>
+          </div>
+          <h1 className="text-lg font-semibold text-gray-900">Iniciar sesión</h1>
+          <p className="text-sm text-gray-500 mt-1">Acceso exclusivo para miembros del equipo</p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
               Correo electrónico
             </label>
             <input
@@ -47,13 +52,13 @@ export default function LoginPage() {
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+              className="w-full border border-black/10 bg-gray-50/60 rounded-xl px-3.5 py-2 text-sm text-gray-900 focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors"
               placeholder="tu@empresa.com"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
               Contraseña
             </label>
             <input
@@ -61,13 +66,13 @@ export default function LoginPage() {
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+              className="w-full border border-black/10 bg-gray-50/60 rounded-xl px-3.5 py-2 text-sm text-gray-900 focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors"
               placeholder="••••••••"
             />
           </div>
 
           {error && (
-            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            <p className="text-sm text-red-600 bg-red-50 border border-red-200/80 rounded-xl px-3.5 py-2">
               {error}
             </p>
           )}
@@ -75,7 +80,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-brand-700 text-white text-sm font-semibold py-2 rounded-lg hover:bg-brand-800 transition-colors disabled:opacity-50"
+            className="w-full bg-brand-600 text-white text-sm font-semibold py-2.5 rounded-full shadow-sm hover:bg-brand-700 active:scale-[0.98] transition-all duration-150 disabled:opacity-50"
           >
             {loading ? "Iniciando sesión..." : "Iniciar sesión"}
           </button>
