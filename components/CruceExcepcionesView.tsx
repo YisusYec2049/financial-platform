@@ -24,11 +24,13 @@ type EditState = { incp: string; correo_2: string };
 const MOTIVO_LABEL: Record<string, string> = {
   sin_cruce: "Sin cruce",
   cruce_ambiguo: "Cruce ambiguo",
+  cruce_discrepante: "Discrepante",
 };
 
 const MOTIVO_BADGE: Record<string, string> = {
   sin_cruce: "bg-red-50 text-red-700",
   cruce_ambiguo: "bg-amber-50 text-amber-700",
+  cruce_discrepante: "bg-purple-50 text-purple-700",
 };
 
 // Agrupa filas que comparten un mismo INCP o Correo(2) no vacío, para que
@@ -317,6 +319,7 @@ export default function CruceExcepcionesView() {
             <option value="" className="text-gray-900">Todos los motivos</option>
             <option value="sin_cruce" className="text-gray-900">Sin cruce</option>
             <option value="cruce_ambiguo" className="text-gray-900">Cruce ambiguo</option>
+            <option value="cruce_discrepante" className="text-gray-900">Discrepante (INCP ≠ Correo(2))</option>
           </select>
           <div className="relative w-64">
             <input
@@ -394,14 +397,19 @@ export default function CruceExcepcionesView() {
               </tr>
             ) : (
               groupedRows.map(({ row, grouped }) => {
-                const edit    = getEdit(row);
-                const saving  = savingKey === row.matching_key;
-                const rowErr  = rowActionError[row.matching_key];
+                const edit         = getEdit(row);
+                const saving       = savingKey === row.matching_key;
+                const rowErr       = rowActionError[row.matching_key];
+                const isDiscrepante = row.excepcion_motivo === "cruce_discrepante";
                 return (
                   <tr
                     key={row.matching_key}
                     className={`border-t border-gray-100 hover:bg-gray-50 transition-colors duration-100 align-top ${
-                      grouped ? "bg-amber-50/40 border-l-2 border-l-amber-400" : ""
+                      isDiscrepante
+                        ? "bg-purple-50/40 border-l-2 border-l-purple-400"
+                        : grouped
+                        ? "bg-amber-50/40 border-l-2 border-l-amber-400"
+                        : ""
                     }`}
                   >
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.identification)}</td>
@@ -417,23 +425,33 @@ export default function CruceExcepcionesView() {
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.program)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.phone)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.payment_amount)}</td>
-                    <td className="px-4 py-2.5">
-                      <input
-                        type="text"
-                        value={edit.incp}
-                        onChange={(e) => setEdit(row.matching_key, "incp", e.target.value, row)}
-                        disabled={saving}
-                        className="w-28 border border-gray-300 rounded px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-gray-100"
-                      />
+                    <td className={`px-4 py-2.5 ${isDiscrepante ? "bg-purple-50/60" : ""}`}>
+                      <div className="flex items-center gap-1">
+                        {isDiscrepante && <span title="Discrepa con Correo(2)" className="text-purple-600 text-xs">⚠️</span>}
+                        <input
+                          type="text"
+                          value={edit.incp}
+                          onChange={(e) => setEdit(row.matching_key, "incp", e.target.value, row)}
+                          disabled={saving}
+                          className={`w-28 border rounded px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-gray-100 ${
+                            isDiscrepante ? "border-purple-400" : "border-gray-300"
+                          }`}
+                        />
+                      </div>
                     </td>
-                    <td className="px-4 py-2.5">
-                      <input
-                        type="text"
-                        value={edit.correo_2}
-                        onChange={(e) => setEdit(row.matching_key, "correo_2", e.target.value, row)}
-                        disabled={saving}
-                        className="w-36 border border-gray-300 rounded px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-gray-100"
-                      />
+                    <td className={`px-4 py-2.5 ${isDiscrepante ? "bg-purple-50/60" : ""}`}>
+                      <div className="flex items-center gap-1">
+                        {isDiscrepante && <span title="Discrepa con INCP" className="text-purple-600 text-xs">⚠️</span>}
+                        <input
+                          type="text"
+                          value={edit.correo_2}
+                          onChange={(e) => setEdit(row.matching_key, "correo_2", e.target.value, row)}
+                          disabled={saving}
+                          className={`w-36 border rounded px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-gray-100 ${
+                            isDiscrepante ? "border-purple-400" : "border-gray-300"
+                          }`}
+                        />
+                      </div>
                     </td>
                     <td className="px-4 py-2.5">
                       <span className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${row.excepcion_motivo ? MOTIVO_BADGE[row.excepcion_motivo] ?? "bg-gray-100 text-gray-700" : "bg-gray-100 text-gray-700"}`}>
