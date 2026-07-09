@@ -22,6 +22,9 @@ type ExcepcionRow = {
 
 type EditState = { incp: string; correo_2: string };
 
+type NoteInfo = { fuente: string; clave: string; comentario: string; actualizado_en: string };
+type NoteKey = { fuente: string; clave: string };
+
 const MOTIVO_LABEL: Record<string, string> = {
   sin_cruce: "Sin cruce",
   cruce_ambiguo: "Cruce ambiguo",
@@ -33,6 +36,34 @@ const MOTIVO_BADGE: Record<string, string> = {
   cruce_ambiguo: "bg-amber-50 text-amber-700",
   cruce_discrepante: "bg-purple-50 text-purple-700",
 };
+
+const NOTA_FUENTE_LABEL: Record<string, string> = {
+  incp: "Nota (INCP)",
+  correo_bc2576: "Nota (correo Bancolombia)",
+  correo_wompi: "Nota (correo Wompi)",
+  correo_stripe: "Nota (correo Stripe)",
+};
+
+// Determina contra cuál hoja de correo se compara esta fila, según cruzar.py:
+// BANCOLOMBIA -> correo_bc2576, WOMPI* -> correo_wompi, STRIPE_USA -> correo_stripe.
+// Placetopay y otros medios no tienen lookup de correo_2, solo aplica INCP.
+function correoFuente(paymentMethod: string | null): string | null {
+  const pm = (paymentMethod || "").toUpperCase();
+  if (pm === "BANCOLOMBIA") return "correo_bc2576";
+  if (pm.startsWith("WOMPI")) return "correo_wompi";
+  if (pm === "STRIPE_USA") return "correo_stripe";
+  return null;
+}
+
+function noteKeysForRow(row: ExcepcionRow): NoteKey[] {
+  const keys: NoteKey[] = [];
+  if (row.identification?.trim()) keys.push({ fuente: "incp", clave: row.identification.trim() });
+  const fuente = correoFuente(row.payment_method);
+  if (fuente && row.email?.trim()) keys.push({ fuente, clave: row.email.trim().toLowerCase() });
+  return keys;
+}
+
+const noteMapKey = (fuente: string, clave: string) => `${fuente}:${clave}`;
 
 // Agrupa filas que comparten un mismo INCP o Correo(2) no vacío, para que
 // aparezcan una debajo de la otra y sea fácil compararlas y resolver la ambigüedad.
@@ -122,6 +153,8 @@ export default function CruceExcepcionesView() {
   const [discardError, setDiscardError]       = useState<Record<string, string>>({});
   const [discardMessage, setDiscardMessage]   = useState<Record<string, string>>({});
   const [discardingKey, setDiscardingKey]     = useState<string | null>(null);
+  const [notes, setNotes]                     = useState<Record<string, NoteInfo>>({});
+  const [noteEdits, setNoteEdits]             = useState<Record<string, string>>({});
   const searchTimeout                     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef                = useRef<AbortController | null>(null);
   const tableContainerRef                 = useRef<HTMLDivElement>(null);
@@ -152,6 +185,28 @@ export default function CruceExcepcionesView() {
     setMethods(grouped);
   }, []);
 
+  const fetchNotes = useCallback(async (rows: ExcepcionRow[]) => {
+    const keyMap = new Map<string, NoteKey>();
+    for (const row of rows) {
+      for (const k of noteKeysForRow(row)) keyMap.set(noteMapKey(k.fuente, k.clave), k);
+    }
+    if (keyMap.size === 0) { setNotes({}); return; }
+    try {
+      const res  = await fetch("/api/cruce/notes/lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keys: [...keyMap.values()] }),
+      });
+      const json = await res.json();
+      if (!res.ok) return;
+      const map: Record<string, NoteInfo> = {};
+      for (const n of (json.notes || []) as NoteInfo[]) map[noteMapKey(n.fuente, n.clave)] = n;
+      setNotes(map);
+    } catch {
+      // Silencioso: las notas son informativas, no deben bloquear la vista de excepciones.
+    }
+  }, []);
+
   const fetchData = useCallback(async (currentPage = 1) => {
     if (abortControllerRef.current) abortControllerRef.current.abort();
     abortControllerRef.current = new AbortController();
@@ -174,13 +229,14 @@ export default function CruceExcepcionesView() {
       if (!res.ok) throw new Error(json.error || "Error al cargar datos");
       setData(json.data || []);
       setTotal(json.count || 0);
+      fetchNotes(json.data || []);
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
       setFetchError(err instanceof Error ? err.message : "Error inesperado");
     } finally {
       setLoading(false);
     }
-  }, [search, excepcionMotivo, incpCorreo, paymentMethod, payFrom, payTo]);
+  }, [search, excepcionMotivo, incpCorreo, paymentMethod, payFrom, payTo, fetchNotes]);
 
   useEffect(() => {
     fetchMethods();
@@ -338,6 +394,37 @@ export default function CruceExcepcionesView() {
       delete next[matchingKey];
       return next;
     });
+    setNoteEdits((prev) => {
+      const next = { ...prev };
+      delete next[matchingKey];
+      return next;
+    });
+  };
+
+  const getNoteEdit = (row: ExcepcionRow): string => {
+    if (noteEdits[row.matching_key] !== undefined) return noteEdits[row.matching_key];
+    for (const k of noteKeysForRow(row)) {
+      const existing = notes[noteMapKey(k.fuente, k.clave)];
+      if (existing) return existing.comentario;
+    }
+    return "";
+  };
+
+  // Guarda el mismo comentario contra cada lookup aplicable a la fila (INCP y/o correo_*),
+  // ya que la nota está asociada a la persona, no a la transacción puntual.
+  const persistNote = async (row: ExcepcionRow) => {
+    const comentario = getNoteEdit(row).trim();
+    if (!comentario) return;
+    const keys = noteKeysForRow(row);
+    await Promise.all(
+      keys.map((k) =>
+        fetch("/api/cruce/notes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fuente: k.fuente, clave: k.clave, comentario }),
+        }).catch(() => null)
+      )
+    );
   };
 
   const handleSave = async (row: ExcepcionRow) => {
@@ -356,6 +443,7 @@ export default function CruceExcepcionesView() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al guardar");
+      await persistNote(row);
       removeRow(row.matching_key);
     } catch (err) {
       setRowActionError((prev) => ({
@@ -381,6 +469,7 @@ export default function CruceExcepcionesView() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al guardar");
+      await persistNote(row);
       removeRow(row.matching_key);
     } catch (err) {
       setRowActionError((prev) => ({
@@ -646,7 +735,25 @@ export default function CruceExcepcionesView() {
                       </span>
                     </td>
                     <td className="px-4 py-2.5">
-                      <div className="flex flex-col gap-1 min-w-[150px]">
+                      <div className="flex flex-col gap-1 min-w-[190px]">
+                        {noteKeysForRow(row).map((k) => {
+                          const existing = notes[noteMapKey(k.fuente, k.clave)];
+                          if (!existing) return null;
+                          return (
+                            <div key={k.fuente} className="bg-sky-50/70 border border-sky-200/80 rounded-lg px-2 py-1.5">
+                              <p className="text-[11px] font-medium text-sky-800">{NOTA_FUENTE_LABEL[k.fuente] ?? "Nota"}</p>
+                              <p className="text-xs text-sky-900 whitespace-pre-wrap">{existing.comentario}</p>
+                            </div>
+                          );
+                        })}
+                        <textarea
+                          placeholder="Nota sobre esta ambigüedad (opcional)..."
+                          value={getNoteEdit(row)}
+                          onChange={(e) => setNoteEdits((prev) => ({ ...prev, [row.matching_key]: e.target.value }))}
+                          disabled={saving}
+                          rows={2}
+                          className="w-full text-xs border border-gray-300 rounded-lg px-2 py-1.5 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100 resize-none"
+                        />
                         <button
                           onClick={() => handleSave(row)}
                           disabled={saving}
