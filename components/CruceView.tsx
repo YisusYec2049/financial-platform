@@ -2,7 +2,80 @@
 
 import { useEffect, useState, useCallback, useRef, useLayoutEffect } from "react";
 import { useSidebar } from "@/components/SidebarContext";
-import CruceExcepcionesView from "@/components/CruceExcepcionesView";
+import CruceExcepcionesView, { type CruceExcepcionesViewRef } from "@/components/CruceExcepcionesView";
+
+type TriggerStatus = "idle" | "running" | "done";
+
+function TriggerCruceButton({ onDone }: { onDone: () => void }) {
+  const [status, setStatus]   = useState<TriggerStatus>("idle");
+  const [message, setMessage] = useState("");
+  const pollRef               = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+  }, []);
+
+  useEffect(() => stopPolling, [stopPolling]);
+
+  const startPolling = useCallback(() => {
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const res  = await fetch("/api/cruce/trigger/status");
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Error al consultar el estado");
+
+        if (json.status === "done") {
+          stopPolling();
+          setStatus("done");
+          setMessage(json.exit_code === 0 ? "Cruce actualizado" : "El cruce terminó con errores");
+          onDone();
+          setTimeout(() => setStatus("idle"), 3000);
+        }
+      } catch (err) {
+        stopPolling();
+        setStatus("idle");
+        setMessage(err instanceof Error ? err.message : "Error inesperado");
+      }
+    }, 4000);
+  }, [stopPolling, onDone]);
+
+  const handleClick = async () => {
+    setStatus("running");
+    setMessage("");
+    try {
+      const statusRes  = await fetch("/api/cruce/trigger/status");
+      const statusJson = await statusRes.json();
+      if (statusJson.status !== "running") {
+        const res  = await fetch("/api/cruce/trigger", { method: "POST" });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "No se pudo iniciar la actualización");
+      }
+      startPolling();
+    } catch (err) {
+      setStatus("idle");
+      setMessage(err instanceof Error ? err.message : "Error inesperado");
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      {message && (
+        <span className="text-xs text-gray-500">{message}</span>
+      )}
+      <button
+        onClick={handleClick}
+        disabled={status === "running"}
+        className="flex items-center gap-1.5 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 px-3.5 py-1.5 rounded-full active:scale-95 transition-all duration-200 ease-(--ease-spring)"
+      >
+        <svg className={`w-3.5 h-3.5 ${status === "running" ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        {status === "running" ? "Actualizando..." : "Actualizar cruce"}
+      </button>
+    </div>
+  );
+}
 
 function SegmentedControl({
   value,
@@ -78,6 +151,7 @@ export default function CruceView() {
   const abortControllerRef                = useRef<AbortController | null>(null);
   const tableContainerRef                 = useRef<HTMLDivElement>(null);
   const fixedScrollRef                    = useRef<HTMLDivElement>(null);
+  const excepcionesRef                    = useRef<CruceExcepcionesViewRef>(null);
 
   const PAGE_SIZE = 100;
 
@@ -180,6 +254,11 @@ export default function CruceView() {
     fetchData(p);
   };
 
+  const handleTriggerDone = () => {
+    if (tab === "todas") fetchData(page);
+    else excepcionesRef.current?.refresh();
+  };
+
   const fmt = (v: string | null) => v || "—";
   const fmtMonto = (v: number | null) =>
     v != null ? new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(v) : "—";
@@ -197,18 +276,21 @@ export default function CruceView() {
           </span>
         </div>
 
-        <SegmentedControl
-          value={tab}
-          onChange={(v) => setTab(v as "todas" | "excepciones")}
-          options={[
-            { value: "todas", label: "Todas" },
-            { value: "excepciones", label: "Excepciones" },
-          ]}
-        />
+        <div className="flex items-center gap-3 flex-wrap">
+          <TriggerCruceButton onDone={handleTriggerDone} />
+          <SegmentedControl
+            value={tab}
+            onChange={(v) => setTab(v as "todas" | "excepciones")}
+            options={[
+              { value: "todas", label: "Todas" },
+              { value: "excepciones", label: "Excepciones" },
+            ]}
+          />
+        </div>
       </div>
 
       {tab === "excepciones" ? (
-        <CruceExcepcionesView />
+        <CruceExcepcionesView ref={excepcionesRef} />
       ) : (
       <>
       <div className={`${PANEL} animate-fade-in [animation-delay:60ms] px-6 py-4 space-y-3`}>

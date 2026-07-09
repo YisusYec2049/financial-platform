@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, forwardRef, useImperativeHandle } from "react";
 import * as XLSX from "xlsx";
 import { useSidebar } from "@/components/SidebarContext";
+
+export type CruceExcepcionesViewRef = { refresh: () => void };
 
 type ExcepcionRow = {
   matching_key: string;
@@ -128,7 +130,7 @@ function groupByIncpOrCorreo(rows: ExcepcionRow[]): { row: ExcepcionRow; grouped
   return result;
 }
 
-export default function CruceExcepcionesView() {
+const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceExcepcionesView(_props, ref) {
   const { width: sidebarWidth }           = useSidebar();
   const [data, setData]                   = useState<ExcepcionRow[]>([]);
   const [total, setTotal]                 = useState(0);
@@ -237,6 +239,10 @@ export default function CruceExcepcionesView() {
       setLoading(false);
     }
   }, [search, excepcionMotivo, incpCorreo, paymentMethod, payFrom, payTo, fetchNotes]);
+
+  useImperativeHandle(ref, () => ({
+    refresh: () => fetchData(page),
+  }), [fetchData, page]);
 
   useEffect(() => {
     fetchMethods();
@@ -860,4 +866,6 @@ export default function CruceExcepcionesView() {
       </div>
     </div>
   );
-}
+});
+
+export default CruceExcepcionesView;
