@@ -33,7 +33,7 @@ export default function Sidebar() {
     <aside
       onMouseEnter={() => setCollapsed(false)}
       onMouseLeave={() => setCollapsed(true)}
-      className={`shrink-0 bg-[#f6f6f8] border-r border-black/[0.06] min-h-screen flex flex-col overflow-hidden transition-all duration-300 ease-in-out ${
+      className={`shrink-0 sticky top-0 h-screen bg-[#f6f6f8] border-r border-black/[0.06] flex flex-col overflow-hidden transition-all duration-300 ease-in-out ${
         collapsed ? "w-14" : "w-56"
       }`}
     >
