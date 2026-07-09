@@ -1,8 +1,49 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useLayoutEffect } from "react";
 import { useSidebar } from "@/components/SidebarContext";
 import CruceExcepcionesView from "@/components/CruceExcepcionesView";
+
+function SegmentedControl({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [indicator, setIndicator] = useState({ left: 0, width: 0 });
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const active = container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`);
+    if (active) setIndicator({ left: active.offsetLeft, width: active.offsetWidth });
+  }, [value, options]);
+
+  return (
+    <div ref={containerRef} className="relative inline-flex bg-gray-100 rounded-xl p-1 gap-1">
+      <div
+        className="absolute top-1 bottom-1 rounded-lg bg-white shadow-sm transition-all duration-300 ease-(--ease-spring)"
+        style={{ left: indicator.left, width: indicator.width }}
+      />
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          data-value={opt.value}
+          onClick={() => onChange(opt.value)}
+          className={`relative z-10 px-4 py-1.5 text-sm font-medium rounded-lg whitespace-nowrap transition-colors duration-200 ${
+            value === opt.value ? "text-gray-900" : "text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 type CruceRow = {
   matching_key: string;
@@ -148,7 +189,7 @@ export default function CruceView() {
 
   return (
     <div className="p-5 pb-8 space-y-4">
-      <div className={`${PANEL} px-6 py-4 flex items-center justify-between flex-wrap gap-3`}>
+      <div className={`${PANEL} animate-slide-down px-6 py-4 flex items-center justify-between flex-wrap gap-3`}>
         <div className="flex items-center gap-3 flex-wrap">
           <h1 className="text-lg font-semibold text-gray-900">Cruce de Cartera</h1>
           <span className="text-xs text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full font-medium">
@@ -156,32 +197,21 @@ export default function CruceView() {
           </span>
         </div>
 
-        {/* Segmented control */}
-        <div className="inline-flex bg-gray-100 rounded-xl p-1 gap-1">
-          <button
-            onClick={() => setTab("todas")}
-            className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-all duration-150 ${
-              tab === "todas" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            Todas
-          </button>
-          <button
-            onClick={() => setTab("excepciones")}
-            className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-all duration-150 ${
-              tab === "excepciones" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            Excepciones
-          </button>
-        </div>
+        <SegmentedControl
+          value={tab}
+          onChange={(v) => setTab(v as "todas" | "excepciones")}
+          options={[
+            { value: "todas", label: "Todas" },
+            { value: "excepciones", label: "Excepciones" },
+          ]}
+        />
       </div>
 
       {tab === "excepciones" ? (
         <CruceExcepcionesView />
       ) : (
       <>
-      <div className={`${PANEL} px-6 py-4 space-y-3`}>
+      <div className={`${PANEL} animate-fade-in [animation-delay:60ms] px-6 py-4 space-y-3`}>
         <div className="flex gap-3 flex-wrap items-center">
           <div className="relative w-80">
             <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -237,7 +267,7 @@ export default function CruceView() {
         </div>
       )}
 
-      <div className={`${PANEL} overflow-hidden`}>
+      <div className={`${PANEL} animate-fade-in [animation-delay:100ms] overflow-hidden`}>
         <div ref={tableContainerRef} className="overflow-x-auto">
           <table className="w-full text-sm border-collapse">
             <thead>
@@ -255,7 +285,7 @@ export default function CruceView() {
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Correo(2)</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody key={page} className="divide-y divide-gray-100 animate-fade-in">
               {loading && data.length === 0 ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
@@ -300,22 +330,22 @@ export default function CruceView() {
             <span>Página {page} de {totalPages}</span>
             <div className="flex gap-1">
               <button onClick={() => handlePage(1)} disabled={page === 1}
-                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">«</button>
+                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring)">«</button>
               <button onClick={() => handlePage(page - 1)} disabled={page === 1}
-                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">‹</button>
+                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring)">‹</button>
               {[...Array(Math.min(5, totalPages))].map((_, i) => {
                 const p = Math.max(1, Math.min(page - 2, totalPages - 4)) + i;
                 return (
                   <button key={p} onClick={() => handlePage(p)}
-                    className={`min-w-7 h-7 px-2 rounded-full hover:bg-gray-100 active:scale-95 transition-all duration-150 ${p === page ? "bg-brand-600 text-white shadow-sm hover:bg-brand-600" : ""}`}>
+                    className={`min-w-7 h-7 px-2 rounded-full hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) ${p === page ? "bg-brand-600 text-white shadow-sm hover:bg-brand-600" : ""}`}>
                     {p}
                   </button>
                 );
               })}
               <button onClick={() => handlePage(page + 1)} disabled={page === totalPages}
-                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">›</button>
+                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring)">›</button>
               <button onClick={() => handlePage(totalPages)} disabled={page === totalPages}
-                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">»</button>
+                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring)">»</button>
             </div>
           </div>
         )}

@@ -31,7 +31,7 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-[#f2f2f4] flex items-center justify-center px-4">
-      <div className="bg-white rounded-2xl shadow-[0_1px_1px_rgba(0,0,0,0.03),0_16px_40px_-16px_rgba(0,0,0,0.18)] border border-black/[0.06] w-full max-w-sm p-8">
+      <div className="animate-pop-in bg-white rounded-2xl shadow-[0_1px_1px_rgba(0,0,0,0.03),0_16px_40px_-16px_rgba(0,0,0,0.18)] border border-black/[0.06] w-full max-w-sm p-8">
         <div className="mb-8 flex flex-col items-center text-center">
           <div className="w-12 h-12 rounded-2xl bg-brand-600 shadow-sm flex items-center justify-center mb-4">
             <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -72,7 +72,7 @@ export default function LoginPage() {
           </div>
 
           {error && (
-            <p className="text-sm text-red-600 bg-red-50 border border-red-200/80 rounded-xl px-3.5 py-2">
+            <p className="animate-shake text-sm text-red-600 bg-red-50 border border-red-200/80 rounded-xl px-3.5 py-2">
               {error}
             </p>
           )}
@@ -80,7 +80,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-brand-600 text-white text-sm font-semibold py-2.5 rounded-full shadow-sm hover:bg-brand-700 active:scale-[0.98] transition-all duration-150 disabled:opacity-50"
+            className="w-full bg-brand-600 text-white text-sm font-semibold py-2.5 rounded-full shadow-sm hover:bg-brand-700 hover:brightness-105 active:scale-[0.97] transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 disabled:active:scale-100"
           >
             {loading ? "Iniciando sesión..." : "Iniciar sesión"}
           </button>

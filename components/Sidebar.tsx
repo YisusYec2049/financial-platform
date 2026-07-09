@@ -44,7 +44,7 @@ export default function Sidebar() {
       }`}
     >
       <div className="px-3 py-4 flex items-center gap-2.5">
-        <div className="shrink-0 w-8 h-8 rounded-lg bg-brand-600 shadow-sm flex items-center justify-center">
+        <div className="shrink-0 w-8 h-8 rounded-lg bg-brand-600 shadow-sm flex items-center justify-center transition-transform duration-300 ease-(--ease-spring) hover:scale-110 hover:rotate-3">
           <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .672-3 1.5S10.343 11 12 11s3 .672 3 1.5-1.343 1.5-3 1.5m0-6V6m0 9v1.5M12 6v0a3 3 0 013 3M12 18a3 3 0 01-3-3" />
           </svg>
@@ -65,12 +65,12 @@ export default function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
-              className={`flex items-center gap-2.5 px-2 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
+              className={`group flex items-center gap-2.5 px-2 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all duration-200 ease-(--ease-spring) active:scale-[0.97] ${
                 active ? "bg-brand-600 text-white shadow-sm" : "text-gray-600 hover:bg-black/[0.04]"
               }`}
             >
               <svg
-                className={`w-4 h-4 shrink-0 ${active ? "text-white" : "text-gray-500"}`}
+                className={`w-4 h-4 shrink-0 transition-transform duration-200 ease-(--ease-spring) group-hover:scale-110 ${active ? "text-white" : "text-gray-500"}`}
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"

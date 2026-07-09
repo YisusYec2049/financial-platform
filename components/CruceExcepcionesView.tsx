@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import * as XLSX from "xlsx";
 import { useSidebar } from "@/components/SidebarContext";
 
 type ExcepcionRow = {
@@ -114,10 +115,18 @@ export default function CruceExcepcionesView() {
   const [edits, setEdits]                 = useState<Record<string, EditState>>({});
   const [rowActionError, setRowActionError] = useState<Record<string, string>>({});
   const [savingKey, setSavingKey]         = useState<string | null>(null);
+  const [dropdownOpen, setDropdownOpen]   = useState(false);
+  const [discardOpen, setDiscardOpen]         = useState<Record<string, boolean>>({});
+  const [discardCandidates, setDiscardCandidates] = useState<Record<string, string[]>>({});
+  const [discardLoading, setDiscardLoading]   = useState<Record<string, boolean>>({});
+  const [discardError, setDiscardError]       = useState<Record<string, string>>({});
+  const [discardMessage, setDiscardMessage]   = useState<Record<string, string>>({});
+  const [discardingKey, setDiscardingKey]     = useState<string | null>(null);
   const searchTimeout                     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef                = useRef<AbortController | null>(null);
   const tableContainerRef                 = useRef<HTMLDivElement>(null);
   const fixedScrollRef                    = useRef<HTMLDivElement>(null);
+  const dropdownRef                       = useRef<HTMLDivElement>(null);
 
   const PAGE_SIZE = 100;
 
@@ -215,6 +224,90 @@ export default function CruceExcepcionesView() {
     return () => window.removeEventListener("resize", update);
   }, [data]);
 
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const buildDownloadParams = () => {
+    const params = new URLSearchParams();
+    if (search)          params.set("search", search);
+    if (excepcionMotivo) params.set("excepcion_motivo", excepcionMotivo);
+    if (incpCorreo)      params.set("incp_correo", incpCorreo);
+    if (paymentMethod)   params.set("payment_method", paymentMethod);
+    if (payFrom)         params.set("pay_from", payFrom);
+    if (payTo)           params.set("pay_to", payTo);
+    return params;
+  };
+
+  const downloadExcel = async () => {
+    setDropdownOpen(false);
+    setLoading(true);
+    setFetchError("");
+    try {
+      const res  = await fetch(`/api/cruce/exceptions/download?${buildDownloadParams()}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al descargar");
+      const allRows = json.data || [];
+      if (json.truncated) {
+        setFetchError("Se descargaron las primeras 50,000 filas. Usa los filtros para acotar la búsqueda.");
+      }
+      const ws = XLSX.utils.json_to_sheet(allRows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Excepciones");
+      XLSX.writeFile(wb, `excepciones_cruce_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : "Error al descargar el archivo");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const downloadCSV = async () => {
+    setDropdownOpen(false);
+    setLoading(true);
+    setFetchError("");
+    try {
+      const res  = await fetch(`/api/cruce/exceptions/download?${buildDownloadParams()}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al descargar");
+      if (json.truncated) {
+        setFetchError("Se descargaron las primeras 50,000 filas. Usa los filtros para acotar la búsqueda.");
+      }
+      const rows: Record<string, unknown>[] = json.data || [];
+      if (rows.length === 0) return;
+
+      const headers = Object.keys(rows[0]);
+      const csvLines = [
+        headers.join(","),
+        ...rows.map((row) =>
+          headers.map((h) => {
+            const val = row[h] ?? "";
+            const str = String(val).replace(/"/g, '""');
+            return str.includes(",") || str.includes("\n") || str.includes('"') ? `"${str}"` : str;
+          }).join(",")
+        ),
+      ];
+
+      const blob = new Blob([csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      a.download = `excepciones_cruce_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : "Error al descargar el archivo");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const totalPages = Math.ceil(total / PAGE_SIZE);
   const groupedRows = useMemo(() => groupByIncpOrCorreo(data), [data]);
 
@@ -299,12 +392,53 @@ export default function CruceExcepcionesView() {
     }
   };
 
+  const toggleDiscardPanel = async (row: ExcepcionRow) => {
+    const key = row.matching_key;
+    const willOpen = !discardOpen[key];
+    setDiscardOpen((prev) => ({ ...prev, [key]: willOpen }));
+    if (willOpen && !discardCandidates[key]) {
+      setDiscardLoading((prev) => ({ ...prev, [key]: true }));
+      setDiscardError((prev) => ({ ...prev, [key]: "" }));
+      try {
+        const res = await fetch(`/api/cruce/exceptions/incp-candidates?identification=${encodeURIComponent(row.identification)}`);
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Error al cargar candidatos");
+        setDiscardCandidates((prev) => ({ ...prev, [key]: json.candidates || [] }));
+      } catch (err) {
+        setDiscardError((prev) => ({ ...prev, [key]: err instanceof Error ? err.message : "Error inesperado" }));
+      } finally {
+        setDiscardLoading((prev) => ({ ...prev, [key]: false }));
+      }
+    }
+  };
+
+  const handleDiscardCandidate = async (row: ExcepcionRow, candidate: string) => {
+    const key = row.matching_key;
+    setDiscardingKey(`${key}:${candidate}`);
+    setDiscardError((prev) => ({ ...prev, [key]: "" }));
+    try {
+      const res = await fetch("/api/cruce/exceptions/discard-incp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ identification: row.identification, id_inscripcion_excluido: candidate }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al descartar");
+      setDiscardCandidates((prev) => ({ ...prev, [key]: (prev[key] || []).filter((c) => c !== candidate) }));
+      setDiscardMessage((prev) => ({ ...prev, [key]: "Se descartó este número. La fila se actualizará automáticamente en el próximo cruce." }));
+    } catch (err) {
+      setDiscardError((prev) => ({ ...prev, [key]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setDiscardingKey(null);
+    }
+  };
+
   const PANEL = "bg-white rounded-2xl border border-black/[0.06] shadow-[0_1px_1px_rgba(0,0,0,0.03),0_8px_20px_-12px_rgba(0,0,0,0.15)]";
   const INPUT = "border border-black/10 bg-gray-50/60 rounded-xl px-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors";
 
   return (
     <div className="space-y-4">
-      <div className={`${PANEL} px-6 py-4 space-y-3`}>
+      <div className={`${PANEL} animate-fade-in px-6 py-4 space-y-3`}>
         <div className="flex gap-3 flex-wrap items-center">
           <div className="relative w-80">
             <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -369,8 +503,42 @@ export default function CruceExcepcionesView() {
         </div>
       </div>
 
-      <div className="px-1 text-sm text-gray-500">
-        {loading ? "Cargando..." : `${total.toLocaleString("es-CO")} excepciones encontradas`}
+      <div className="px-1 flex items-center justify-between gap-3">
+        <span className="text-sm text-gray-500">
+          {loading ? "Cargando..." : `${total.toLocaleString("es-CO")} excepciones encontradas`}
+        </span>
+
+        <div ref={dropdownRef} className="relative">
+          <button
+            onClick={() => setDropdownOpen((o) => !o)}
+            disabled={loading || total === 0}
+            className="flex items-center gap-1.5 bg-brand-600 text-white text-sm px-3.5 py-1.5 rounded-full shadow-sm hover:bg-brand-700 hover:brightness-105 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Descargar
+            <svg className={`w-3 h-3 ml-0.5 transition-transform duration-200 ease-(--ease-spring) ${dropdownOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {dropdownOpen && (
+            <div className="animate-pop-in origin-top-right absolute right-0 mt-1.5 w-44 bg-white border border-black/[0.06] rounded-xl shadow-[0_8px_24px_-8px_rgba(0,0,0,0.2)] z-50 overflow-hidden py-1">
+              <button
+                onClick={downloadExcel}
+                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-100"
+              >
+                Descargar Excel
+              </button>
+              <button
+                onClick={downloadCSV}
+                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-100"
+              >
+                Descargar CSV
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {fetchError && (
@@ -379,7 +547,7 @@ export default function CruceExcepcionesView() {
         </div>
       )}
 
-      <div className={`${PANEL} overflow-hidden`}>
+      <div className={`${PANEL} animate-fade-in [animation-delay:60ms] overflow-hidden`}>
         <div ref={tableContainerRef} className="overflow-x-auto">
           <table className="w-full text-sm border-collapse">
             <thead>
@@ -399,7 +567,7 @@ export default function CruceExcepcionesView() {
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Acciones</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody key={page} className="divide-y divide-gray-100 animate-fade-in">
               {loading && data.length === 0 ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
@@ -452,7 +620,7 @@ export default function CruceExcepcionesView() {
                           value={edit.incp}
                           onChange={(e) => setEdit(row.matching_key, "incp", e.target.value, row)}
                           disabled={saving}
-                          className={`w-28 border rounded px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-gray-100 ${
+                          className={`w-28 border rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100 ${
                             isDiscrepante ? "border-purple-400" : "border-gray-300"
                           }`}
                         />
@@ -466,7 +634,7 @@ export default function CruceExcepcionesView() {
                           value={edit.correo_2}
                           onChange={(e) => setEdit(row.matching_key, "correo_2", e.target.value, row)}
                           disabled={saving}
-                          className={`w-36 border rounded px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-gray-100 ${
+                          className={`w-36 border rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100 ${
                             isDiscrepante ? "border-purple-400" : "border-gray-300"
                           }`}
                         />
@@ -478,21 +646,67 @@ export default function CruceExcepcionesView() {
                       </span>
                     </td>
                     <td className="px-4 py-2.5">
-                      <div className="flex flex-col gap-1 min-w-[110px]">
+                      <div className="flex flex-col gap-1 min-w-[150px]">
                         <button
                           onClick={() => handleSave(row)}
                           disabled={saving}
-                          className="text-xs px-2 py-1 rounded bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-150 disabled:opacity-50"
+                          className="text-xs px-2.5 py-1.5 rounded-lg bg-brand-700 text-white hover:bg-brand-800 hover:brightness-105 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 disabled:active:scale-100"
                         >
                           {saving ? "Guardando..." : "Guardar corrección"}
                         </button>
                         <button
                           onClick={() => handleNoIdentificable(row)}
                           disabled={saving}
-                          className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-150 disabled:opacity-50"
+                          className="text-xs px-2.5 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 disabled:active:scale-100"
                         >
                           No se puede identificar
                         </button>
+                        {row.excepcion_motivo === "cruce_ambiguo" && (
+                          <button
+                            onClick={() => toggleDiscardPanel(row)}
+                            disabled={saving}
+                            className="text-xs px-2.5 py-1.5 rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 disabled:active:scale-100"
+                          >
+                            {discardOpen[row.matching_key] ? "Ocultar candidatos" : "Descartar este número"}
+                          </button>
+                        )}
+                        {discardOpen[row.matching_key] && (
+                          <div className="animate-fade-in bg-amber-50/60 border border-amber-200/80 rounded-lg p-2 space-y-1.5">
+                            {discardLoading[row.matching_key] ? (
+                              <p className="text-xs text-gray-500">Cargando candidatos...</p>
+                            ) : discardError[row.matching_key] ? (
+                              <p className="text-xs text-red-600">{discardError[row.matching_key]}</p>
+                            ) : (
+                              <>
+                                {(discardCandidates[row.matching_key]?.length ?? 0) >= 2 ? (
+                                  <>
+                                    <p className="text-xs text-gray-500">¿Cuál número NO corresponde a este pagador?</p>
+                                    {discardCandidates[row.matching_key]!.map((c) => {
+                                      const dKey = `${row.matching_key}:${c}`;
+                                      return (
+                                        <button
+                                          key={c}
+                                          onClick={() => handleDiscardCandidate(row, c)}
+                                          disabled={discardingKey === dKey}
+                                          className="w-full text-left text-xs px-2 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-red-50 hover:border-red-300 hover:text-red-700 transition-colors disabled:opacity-50"
+                                        >
+                                          {discardingKey === dKey ? "Descartando..." : `Descartar ${c}`}
+                                        </button>
+                                      );
+                                    })}
+                                  </>
+                                ) : (
+                                  <p className="text-xs text-gray-500">
+                                    No hay más de un candidato INCP activo para este documento — la ambigüedad no es de tipo INCP.
+                                  </p>
+                                )}
+                                {discardMessage[row.matching_key] && (
+                                  <p className="text-xs text-green-700">{discardMessage[row.matching_key]}</p>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        )}
                         {rowErr && <span className="text-xs text-red-600">{rowErr}</span>}
                       </div>
                     </td>
@@ -509,22 +723,22 @@ export default function CruceExcepcionesView() {
             <span>Página {page} de {totalPages}</span>
             <div className="flex gap-1">
               <button onClick={() => handlePage(1)} disabled={page === 1}
-                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">«</button>
+                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring)">«</button>
               <button onClick={() => handlePage(page - 1)} disabled={page === 1}
-                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">‹</button>
+                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring)">‹</button>
               {[...Array(Math.min(5, totalPages))].map((_, i) => {
                 const p = Math.max(1, Math.min(page - 2, totalPages - 4)) + i;
                 return (
                   <button key={p} onClick={() => handlePage(p)}
-                    className={`min-w-7 h-7 px-2 rounded-full hover:bg-gray-100 active:scale-95 transition-all duration-150 ${p === page ? "bg-brand-600 text-white shadow-sm hover:bg-brand-600" : ""}`}>
+                    className={`min-w-7 h-7 px-2 rounded-full hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) ${p === page ? "bg-brand-600 text-white shadow-sm hover:bg-brand-600" : ""}`}>
                     {p}
                   </button>
                 );
               })}
               <button onClick={() => handlePage(page + 1)} disabled={page === totalPages}
-                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">›</button>
+                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring)">›</button>
               <button onClick={() => handlePage(totalPages)} disabled={page === totalPages}
-                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-150">»</button>
+                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring)">»</button>
             </div>
           </div>
         )}
