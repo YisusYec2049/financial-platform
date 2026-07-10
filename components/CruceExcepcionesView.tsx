@@ -142,6 +142,8 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
   const [paymentMethod, setPaymentMethod] = useState("");
   const [payFrom, setPayFrom]             = useState("");
   const [payTo, setPayTo]                 = useState("");
+  const [regFrom, setRegFrom]             = useState("");
+  const [regTo, setRegTo]                 = useState("");
   const [methods, setMethods]             = useState<{ label: string; value: string }[]>([]);
   const [fetchError, setFetchError]       = useState("");
   const [tableWidth, setTableWidth]       = useState(0);
@@ -223,6 +225,8 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
     if (paymentMethod)   params.set("payment_method", paymentMethod);
     if (payFrom)         params.set("pay_from", payFrom);
     if (payTo)           params.set("pay_to", payTo);
+    if (regFrom)         params.set("reg_from", regFrom);
+    if (regTo)           params.set("reg_to", regTo);
     params.set("page", String(currentPage));
 
     try {
@@ -238,7 +242,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
     } finally {
       setLoading(false);
     }
-  }, [search, excepcionMotivo, incpCorreo, paymentMethod, payFrom, payTo, fetchNotes]);
+  }, [search, excepcionMotivo, incpCorreo, paymentMethod, payFrom, payTo, regFrom, regTo, fetchNotes]);
 
   useImperativeHandle(ref, () => ({
     refresh: () => fetchData(page),
@@ -255,7 +259,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
       fetchData(1);
     }, 400);
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
-  }, [search, excepcionMotivo, incpCorreo, paymentMethod, payFrom, payTo, fetchData]);
+  }, [search, excepcionMotivo, incpCorreo, paymentMethod, payFrom, payTo, regFrom, regTo, fetchData]);
 
   useEffect(() => {
     const tableEl = tableContainerRef.current;
@@ -304,6 +308,8 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
     if (paymentMethod)   params.set("payment_method", paymentMethod);
     if (payFrom)         params.set("pay_from", payFrom);
     if (payTo)           params.set("pay_to", payTo);
+    if (regFrom)         params.set("reg_from", regFrom);
+    if (regTo)           params.set("reg_to", regTo);
     return params;
   };
 
@@ -587,9 +593,17 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
             <input type="date" value={payTo} onChange={(e) => { setPayTo(e.target.value); setPage(1); }}
               className={`${INPUT} py-1`} />
           </div>
-          {(search || excepcionMotivo || incpCorreo || paymentMethod || payFrom || payTo) && (
+          <div className="flex items-center gap-2">
+            <span className="font-medium">Fecha de Ingreso</span>
+            <input type="date" value={regFrom} onChange={(e) => { setRegFrom(e.target.value); setPage(1); }}
+              className={`${INPUT} py-1`} />
+            <span>→</span>
+            <input type="date" value={regTo} onChange={(e) => { setRegTo(e.target.value); setPage(1); }}
+              className={`${INPUT} py-1`} />
+          </div>
+          {(search || excepcionMotivo || incpCorreo || paymentMethod || payFrom || payTo || regFrom || regTo) && (
             <button
-              onClick={() => { setSearch(""); setExcepcionMotivo(""); setIncpCorreo(""); setPaymentMethod(""); setPayFrom(""); setPayTo(""); setPage(1); }}
+              onClick={() => { setSearch(""); setExcepcionMotivo(""); setIncpCorreo(""); setPaymentMethod(""); setPayFrom(""); setPayTo(""); setRegFrom(""); setRegTo(""); setPage(1); }}
               className="text-red-500 hover:text-red-700 text-xs underline"
             >
               Limpiar filtros

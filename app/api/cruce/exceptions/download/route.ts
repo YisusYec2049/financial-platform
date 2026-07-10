@@ -14,6 +14,8 @@ export async function GET(req: NextRequest) {
   const paymentMethod   = searchParams.get("payment_method")?.slice(0, 100) || "";
   const payFrom         = searchParams.get("pay_from") || "";
   const payTo           = searchParams.get("pay_to") || "";
+  const regFrom         = searchParams.get("reg_from") || "";
+  const regTo           = searchParams.get("reg_to") || "";
 
   const supabase = createAdminClient();
   const MAX_ROWS = 50_000;
@@ -49,6 +51,8 @@ export async function GET(req: NextRequest) {
     }
     if (payFrom) query = query.gte("payment_date", payFrom);
     if (payTo)   query = query.lte("payment_date", payTo);
+    if (regFrom) query = query.gte("registration_date", regFrom);
+    if (regTo)   query = query.lte("registration_date", regTo);
 
     const { data, error } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -72,7 +76,7 @@ export async function GET(req: NextRequest) {
   await logAudit({
     user_email: user.email ?? "unknown",
     action: "download",
-    filters: { search, excepcionMotivo, incpCorreo, paymentMethod, payFrom, payTo, view: "cruce_excepciones" },
+    filters: { search, excepcionMotivo, incpCorreo, paymentMethod, payFrom, payTo, regFrom, regTo, view: "cruce_excepciones" },
     result_count: deduped.length,
   });
 
