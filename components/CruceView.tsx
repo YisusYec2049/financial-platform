@@ -131,6 +131,9 @@ type CruceRow = {
   payment_amount: number;
   incp: string | null;
   correo_2: string | null;
+  nombre: string | null;
+  metodo_de_pago: string | null;
+  ci: string | null;
 };
 
 export default function CruceView() {
@@ -377,13 +380,16 @@ export default function CruceView() {
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Matrícula</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">INCP</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Correo(2)</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Nombre</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Método de Pago</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">CI</th>
               </tr>
             </thead>
             <tbody key={page} className="divide-y divide-gray-100 animate-fade-in">
               {loading && data.length === 0 ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 11 }).map((_, j) => (
+                    {Array.from({ length: 14 }).map((_, j) => (
                       <td key={j} className="px-4 py-3">
                         <div className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * j * 7) % 40}%` }} />
                       </td>
@@ -392,7 +398,7 @@ export default function CruceView() {
                 ))
               ) : data.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="text-center py-12 text-gray-400">No hay registros</td>
+                  <td colSpan={14} className="text-center py-12 text-gray-400">No hay registros</td>
                 </tr>
               ) : (
                 data.map((row) => (
@@ -412,6 +418,9 @@ export default function CruceView() {
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.payment_amount)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.incp)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.correo_2)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.nombre)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.metodo_de_pago)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.ci)}</td>
                   </tr>
                 ))
               )}

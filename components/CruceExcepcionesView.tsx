@@ -19,10 +19,13 @@ type ExcepcionRow = {
   payment_amount: number;
   incp: string | null;
   correo_2: string | null;
+  nombre: string | null;
+  metodo_de_pago: string | null;
+  ci: string | null;
   excepcion_motivo: string | null;
 };
 
-type EditState = { incp: string; correo_2: string };
+type EditState = { incp: string; correo_2: string; nombre: string; metodo_de_pago: string; ci: string };
 
 type NoteInfo = { fuente: string; clave: string; comentario: string; actualizado_en: string };
 type NoteKey = { fuente: string; clave: string };
@@ -31,12 +34,14 @@ const MOTIVO_LABEL: Record<string, string> = {
   sin_cruce: "Sin cruce",
   cruce_ambiguo: "Cruce ambiguo",
   cruce_discrepante: "Discrepante",
+  sin_identificar_pagador: "Pagador sin identificar",
 };
 
 const MOTIVO_BADGE: Record<string, string> = {
   sin_cruce: "bg-red-50 text-red-700",
   cruce_ambiguo: "bg-amber-50 text-amber-700",
   cruce_discrepante: "bg-purple-50 text-purple-700",
+  sin_identificar_pagador: "bg-blue-50 text-blue-700",
 };
 
 const NOTA_FUENTE_LABEL: Record<string, string> = {
@@ -389,7 +394,13 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
     v != null ? new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(v) : "—";
 
   const getEdit = (row: ExcepcionRow): EditState =>
-    edits[row.matching_key] ?? { incp: row.incp ?? "", correo_2: row.correo_2 ?? "" };
+    edits[row.matching_key] ?? {
+      incp: row.incp ?? "",
+      correo_2: row.correo_2 ?? "",
+      nombre: row.nombre ?? "",
+      metodo_de_pago: row.metodo_de_pago ?? "",
+      ci: row.ci ?? "",
+    };
 
   const setEdit = (matchingKey: string, field: keyof EditState, value: string, row: ExcepcionRow) => {
     setEdits((prev) => ({
@@ -451,6 +462,9 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
           matching_key: row.matching_key,
           incp: edit.incp,
           correo_2: edit.correo_2,
+          nombre: edit.nombre,
+          metodo_de_pago: edit.metodo_de_pago,
+          ci: edit.ci,
         }),
       });
       const json = await res.json();
@@ -562,6 +576,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
             <option value="sin_cruce" className="text-gray-900">Sin cruce</option>
             <option value="cruce_ambiguo" className="text-gray-900">Cruce ambiguo</option>
             <option value="cruce_discrepante" className="text-gray-900">Discrepante (INCP ≠ Correo(2))</option>
+            <option value="sin_identificar_pagador" className="text-gray-900">Pagador sin identificar</option>
           </select>
           <div className="relative w-64">
             <input
@@ -672,6 +687,9 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Matrícula</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">INCP</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Correo(2)</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Nombre</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Método de Pago</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">CI</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Excepción</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Acciones</th>
               </tr>
@@ -680,7 +698,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
               {loading && data.length === 0 ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 13 }).map((_, j) => (
+                    {Array.from({ length: 16 }).map((_, j) => (
                       <td key={j} className="px-4 py-3">
                         <div className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * j * 7) % 40}%` }} />
                       </td>
@@ -689,7 +707,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                 ))
               ) : data.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="text-center py-12 text-gray-400">No hay excepciones pendientes</td>
+                  <td colSpan={16} className="text-center py-12 text-gray-400">No hay excepciones pendientes</td>
                 </tr>
               ) : (
                 groupedRows.map(({ row, grouped }) => {
@@ -697,12 +715,15 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                   const saving       = savingKey === row.matching_key;
                   const rowErr       = rowActionError[row.matching_key];
                   const isDiscrepante = row.excepcion_motivo === "cruce_discrepante";
+                  const isSinIdentificarPagador = row.excepcion_motivo === "sin_identificar_pagador";
                   return (
                     <tr
                       key={row.matching_key}
                       className={`hover:bg-gray-50/70 transition-colors duration-100 align-top ${
                         isDiscrepante
                           ? "bg-purple-50/40 border-l-2 border-l-purple-400"
+                          : isSinIdentificarPagador
+                          ? "bg-blue-50/40 border-l-2 border-l-blue-400"
                           : grouped
                           ? "bg-amber-50/40 border-l-2 border-l-amber-400"
                           : ""
@@ -748,6 +769,45 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                           }`}
                         />
                       </div>
+                    </td>
+                    <td className={`px-4 py-2.5 ${isSinIdentificarPagador ? "bg-blue-50/60" : ""}`}>
+                      {isSinIdentificarPagador ? (
+                        <input
+                          type="text"
+                          value={edit.nombre}
+                          onChange={(e) => setEdit(row.matching_key, "nombre", e.target.value, row)}
+                          disabled={saving}
+                          className="w-32 border border-blue-400 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                        />
+                      ) : (
+                        <span className="text-gray-700 whitespace-nowrap">{fmt(row.nombre)}</span>
+                      )}
+                    </td>
+                    <td className={`px-4 py-2.5 ${isSinIdentificarPagador ? "bg-blue-50/60" : ""}`}>
+                      {isSinIdentificarPagador ? (
+                        <input
+                          type="text"
+                          value={edit.metodo_de_pago}
+                          onChange={(e) => setEdit(row.matching_key, "metodo_de_pago", e.target.value, row)}
+                          disabled={saving}
+                          className="w-32 border border-blue-400 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                        />
+                      ) : (
+                        <span className="text-gray-700 whitespace-nowrap">{fmt(row.metodo_de_pago)}</span>
+                      )}
+                    </td>
+                    <td className={`px-4 py-2.5 ${isSinIdentificarPagador ? "bg-blue-50/60" : ""}`}>
+                      {isSinIdentificarPagador ? (
+                        <input
+                          type="text"
+                          value={edit.ci}
+                          onChange={(e) => setEdit(row.matching_key, "ci", e.target.value, row)}
+                          disabled={saving}
+                          className="w-24 border border-blue-400 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                        />
+                      ) : (
+                        <span className="text-gray-700 whitespace-nowrap">{fmt(row.ci)}</span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5">
                       <span className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${row.excepcion_motivo ? MOTIVO_BADGE[row.excepcion_motivo] ?? "bg-gray-100 text-gray-700" : "bg-gray-100 text-gray-700"}`}>

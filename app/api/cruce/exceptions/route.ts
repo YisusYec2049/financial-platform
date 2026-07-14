@@ -81,6 +81,9 @@ export async function PATCH(req: NextRequest) {
   const noIdentificable = body?.no_identificable === true;
   const incp            = typeof body?.incp === "string" ? body.incp : null;
   const correo2         = typeof body?.correo_2 === "string" ? body.correo_2 : null;
+  const nombre          = typeof body?.nombre === "string" ? body.nombre : null;
+  const metodoDePago    = typeof body?.metodo_de_pago === "string" ? body.metodo_de_pago : null;
+  const ci              = typeof body?.ci === "string" ? body.ci : null;
 
   if (!matchingKey) {
     return NextResponse.json({ error: "matching_key es requerido" }, { status: 400 });
@@ -88,7 +91,7 @@ export async function PATCH(req: NextRequest) {
 
   const update = noIdentificable
     ? { estado_cruce: "no_identificable" }
-    : { incp, correo_2: correo2, estado_cruce: "cruzado" };
+    : { incp, correo_2: correo2, nombre, metodo_de_pago: metodoDePago, ci, estado_cruce: "cruzado" };
 
   const supabase = createAdminClient();
   const { error, data } = await supabase
