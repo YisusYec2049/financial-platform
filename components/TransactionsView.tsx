@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import * as XLSX from "xlsx";
 import { useSidebar } from "@/components/SidebarContext";
+import { useSessionState } from "@/lib/useSessionState";
 
 type Transaction = {
   id: string;
@@ -27,12 +28,12 @@ export default function TransactionsView() {
   const [total, setTotal]                 = useState(0);
   const [page, setPage]                   = useState(1);
   const [loading, setLoading]             = useState(false);
-  const [search, setSearch]               = useState("");
-  const [paymentMethod, setPaymentMethod] = useState("");
-  const [regFrom, setRegFrom]             = useState("");
-  const [regTo, setRegTo]                 = useState("");
-  const [payFrom, setPayFrom]             = useState("");
-  const [payTo, setPayTo]                 = useState("");
+  const [search, setSearch]               = useSessionState("transactions.search", "");
+  const [paymentMethod, setPaymentMethod] = useSessionState("transactions.paymentMethod", "");
+  const [regFrom, setRegFrom]             = useSessionState("transactions.regFrom", "");
+  const [regTo, setRegTo]                 = useSessionState("transactions.regTo", "");
+  const [payFrom, setPayFrom]             = useSessionState("transactions.payFrom", "");
+  const [payTo, setPayTo]                 = useSessionState("transactions.payTo", "");
   const [methods, setMethods]             = useState<{ label: string; value: string }[]>([]);
   const [lastUpdate, setLastUpdate]       = useState<Date | null>(null);
   const [tableWidth, setTableWidth]       = useState(0);

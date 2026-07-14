@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef, useLayoutEffect } from "react";
 import { useSidebar } from "@/components/SidebarContext";
+import { useSessionState } from "@/lib/useSessionState";
 import CruceExcepcionesView, { type CruceExcepcionesViewRef } from "@/components/CruceExcepcionesView";
 
 type TriggerStatus = "idle" | "running" | "done";
@@ -143,12 +144,12 @@ export default function CruceView() {
   const [total, setTotal]                 = useState(0);
   const [page, setPage]                   = useState(1);
   const [loading, setLoading]             = useState(false);
-  const [search, setSearch]               = useState("");
-  const [paymentMethod, setPaymentMethod] = useState("");
-  const [payFrom, setPayFrom]             = useState("");
-  const [payTo, setPayTo]                 = useState("");
-  const [regFrom, setRegFrom]             = useState("");
-  const [regTo, setRegTo]                 = useState("");
+  const [search, setSearch]               = useSessionState("cruce.search", "");
+  const [paymentMethod, setPaymentMethod] = useSessionState("cruce.paymentMethod", "");
+  const [payFrom, setPayFrom]             = useSessionState("cruce.payFrom", "");
+  const [payTo, setPayTo]                 = useSessionState("cruce.payTo", "");
+  const [regFrom, setRegFrom]             = useSessionState("cruce.regFrom", "");
+  const [regTo, setRegTo]                 = useSessionState("cruce.regTo", "");
   const [methods, setMethods]             = useState<{ label: string; value: string }[]>([]);
   const [fetchError, setFetchError]       = useState("");
   const [tableWidth, setTableWidth]       = useState(0);

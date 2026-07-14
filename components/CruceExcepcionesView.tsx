@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo, forwardRef, useImperativeHandle } from "react";
 import * as XLSX from "xlsx";
 import { useSidebar } from "@/components/SidebarContext";
+import { useSessionState } from "@/lib/useSessionState";
 
 export type CruceExcepcionesViewRef = { refresh: () => void };
 
@@ -35,6 +36,7 @@ const MOTIVO_LABEL: Record<string, string> = {
   cruce_ambiguo: "Cruce ambiguo",
   cruce_discrepante: "Discrepante",
   sin_identificar_pagador: "Pagador sin identificar",
+  cruce_unico: "Solo Correo(2) (sin INCP)",
 };
 
 const MOTIVO_BADGE: Record<string, string> = {
@@ -42,6 +44,7 @@ const MOTIVO_BADGE: Record<string, string> = {
   cruce_ambiguo: "bg-amber-50 text-amber-700",
   cruce_discrepante: "bg-purple-50 text-purple-700",
   sin_identificar_pagador: "bg-blue-50 text-blue-700",
+  cruce_unico: "bg-teal-50 text-teal-700",
 };
 
 const NOTA_FUENTE_LABEL: Record<string, string> = {
@@ -141,14 +144,14 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
   const [total, setTotal]                 = useState(0);
   const [page, setPage]                   = useState(1);
   const [loading, setLoading]             = useState(false);
-  const [search, setSearch]               = useState("");
-  const [excepcionMotivo, setExcepcionMotivo] = useState("");
-  const [incpCorreo, setIncpCorreo]       = useState("");
-  const [paymentMethod, setPaymentMethod] = useState("");
-  const [payFrom, setPayFrom]             = useState("");
-  const [payTo, setPayTo]                 = useState("");
-  const [regFrom, setRegFrom]             = useState("");
-  const [regTo, setRegTo]                 = useState("");
+  const [search, setSearch]               = useSessionState("cruce_excepciones.search", "");
+  const [excepcionMotivo, setExcepcionMotivo] = useSessionState("cruce_excepciones.excepcionMotivo", "");
+  const [incpCorreo, setIncpCorreo]       = useSessionState("cruce_excepciones.incpCorreo", "");
+  const [paymentMethod, setPaymentMethod] = useSessionState("cruce_excepciones.paymentMethod", "");
+  const [payFrom, setPayFrom]             = useSessionState("cruce_excepciones.payFrom", "");
+  const [payTo, setPayTo]                 = useSessionState("cruce_excepciones.payTo", "");
+  const [regFrom, setRegFrom]             = useSessionState("cruce_excepciones.regFrom", "");
+  const [regTo, setRegTo]                 = useSessionState("cruce_excepciones.regTo", "");
   const [methods, setMethods]             = useState<{ label: string; value: string }[]>([]);
   const [fetchError, setFetchError]       = useState("");
   const [tableWidth, setTableWidth]       = useState(0);
@@ -577,6 +580,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
             <option value="cruce_ambiguo" className="text-gray-900">Cruce ambiguo</option>
             <option value="cruce_discrepante" className="text-gray-900">Discrepante (INCP ≠ Correo(2))</option>
             <option value="sin_identificar_pagador" className="text-gray-900">Pagador sin identificar</option>
+            <option value="cruce_unico" className="text-gray-900">Solo Correo(2) (sin INCP)</option>
           </select>
           <div className="relative w-64">
             <input
@@ -716,6 +720,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                   const rowErr       = rowActionError[row.matching_key];
                   const isDiscrepante = row.excepcion_motivo === "cruce_discrepante";
                   const isSinIdentificarPagador = row.excepcion_motivo === "sin_identificar_pagador";
+                  const isCruceUnico = row.excepcion_motivo === "cruce_unico";
                   return (
                     <tr
                       key={row.matching_key}
@@ -724,6 +729,8 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                           ? "bg-purple-50/40 border-l-2 border-l-purple-400"
                           : isSinIdentificarPagador
                           ? "bg-blue-50/40 border-l-2 border-l-blue-400"
+                          : isCruceUnico
+                          ? "bg-teal-50/40 border-l-2 border-l-teal-400"
                           : grouped
                           ? "bg-amber-50/40 border-l-2 border-l-amber-400"
                           : ""
@@ -742,16 +749,17 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.program)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.phone)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.payment_amount)}</td>
-                    <td className={`px-4 py-2.5 ${isDiscrepante ? "bg-purple-50/60" : ""}`}>
+                    <td className={`px-4 py-2.5 ${isDiscrepante ? "bg-purple-50/60" : isCruceUnico ? "bg-teal-50/60" : ""}`}>
                       <div className="flex items-center gap-1">
                         {isDiscrepante && <span title="Discrepa con Correo(2)" className="text-purple-600 text-xs">⚠️</span>}
+                        {isCruceUnico && <span title="Sin INCP identificado" className="text-teal-600 text-xs">⚠️</span>}
                         <input
                           type="text"
                           value={edit.incp}
                           onChange={(e) => setEdit(row.matching_key, "incp", e.target.value, row)}
                           disabled={saving}
                           className={`w-28 border rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100 ${
-                            isDiscrepante ? "border-purple-400" : "border-gray-300"
+                            isDiscrepante ? "border-purple-400" : isCruceUnico ? "border-teal-400" : "border-gray-300"
                           }`}
                         />
                       </div>

@@ -2,22 +2,28 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useSidebar } from "@/components/SidebarContext";
+import { useSessionState } from "@/lib/useSessionState";
 
 type CarteraPreventivaRow = {
   id: number;
   llave: string;
-  convocatoria: string;
-  tipo_programa: string;
   inscrip: string;
   cliente: string;
   correo: string;
+  correo_elec: string | null;
+  codigo_transaccion_1: string | null;
+  codigo_transaccion_2: string | null;
   fecha_vencimiento: string;
   dias_en_cartera: number;
   valor_cuota: number;
   valor_a_cobrar: number;
   programa: string;
   cruce_access: string;
-  asesor: string;
+  sistema_financiero: string | null;
+  moneda: string | null;
+  telefono_1: string | null;
+  telefono_2: string | null;
+  pago: string | null;
   fecha_pago: string | null;
   medio_pago: string | null;
   valor_pago: number | null;
@@ -30,10 +36,10 @@ export default function CarteraPreventivaView() {
   const [total, setTotal]               = useState(0);
   const [page, setPage]                 = useState(1);
   const [loading, setLoading]           = useState(false);
-  const [search, setSearch]             = useState("");
-  const [estado, setEstado]             = useState("todas");
-  const [vencFrom, setVencFrom]         = useState("");
-  const [vencTo, setVencTo]             = useState("");
+  const [search, setSearch]             = useSessionState("cartera_preventiva.search", "");
+  const [estado, setEstado]             = useSessionState("cartera_preventiva.estado", "todas");
+  const [vencFrom, setVencFrom]         = useSessionState("cartera_preventiva.vencFrom", "");
+  const [vencTo, setVencTo]             = useSessionState("cartera_preventiva.vencTo", "");
   const [fetchError, setFetchError]     = useState("");
   const [tableWidth, setTableWidth]     = useState(0);
   const searchTimeout                   = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -209,17 +215,24 @@ export default function CarteraPreventivaView() {
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-gray-50/80 text-gray-500 text-left">
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Convocatoria</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Llave</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Sistema Financiero</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Inscrip.</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Cliente</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Programa</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Correo</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Moneda</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Fecha Vencimiento</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Días en Cartera</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Valor Cuota</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Asesor</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Pago</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Valor a Cobrar</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Programa</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Fecha Pago</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Medio de Pago</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Valor Pago</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 1</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 2</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Correo Electrónico</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Diferencia</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Cruce Access</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Estado</th>
               </tr>
             </thead>
@@ -227,7 +240,7 @@ export default function CarteraPreventivaView() {
               {loading && data.length === 0 ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 12 }).map((_, j) => (
+                    {Array.from({ length: 19 }).map((_, j) => (
                       <td key={j} className="px-4 py-3">
                         <div className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * j * 7) % 40}%` }} />
                       </td>
@@ -236,22 +249,29 @@ export default function CarteraPreventivaView() {
                 ))
               ) : data.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="text-center py-12 text-gray-400">No hay registros</td>
+                  <td colSpan={19} className="text-center py-12 text-gray-400">No hay registros</td>
                 </tr>
               ) : (
                 data.map((row) => (
                   <tr key={row.id} className={`hover:bg-gray-50/70 transition-colors duration-100 ${rowTint(row)}`}>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.convocatoria)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.llave)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.sistema_financiero)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.inscrip)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cliente)}</td>
-                    <td className="px-4 py-2.5 text-gray-700">{fmt(row.programa)}</td>
-                    <td className="px-4 py-2.5 text-gray-500 text-xs">{fmt(row.correo)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.moneda)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.fecha_vencimiento)}</td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{row.dias_en_cartera ?? "—"}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.valor_cuota)}</td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.asesor)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.pago)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.valor_a_cobrar)}</td>
+                    <td className="px-4 py-2.5 text-gray-700">{fmt(row.programa)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.fecha_pago)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.medio_pago)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.valor_pago)}</td>
+                    <td className="px-4 py-2.5 text-gray-700">{fmt(row.codigo_transaccion_1)}</td>
+                    <td className="px-4 py-2.5 text-gray-700">{fmt(row.codigo_transaccion_2)}</td>
+                    <td className="px-4 py-2.5 text-gray-500 text-xs">{fmt(row.correo_elec)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.diferencia)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cruce_access)}</td>
                     <td className="px-4 py-2.5">{paymentBadge(row)}</td>
                   </tr>
                 ))
