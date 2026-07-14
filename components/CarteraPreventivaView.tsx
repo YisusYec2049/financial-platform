@@ -32,10 +32,8 @@ export default function CarteraPreventivaView() {
   const [loading, setLoading]           = useState(false);
   const [search, setSearch]             = useState("");
   const [estado, setEstado]             = useState("todas");
-  const [convocatoria, setConvocatoria] = useState("");
   const [vencFrom, setVencFrom]         = useState("");
   const [vencTo, setVencTo]             = useState("");
-  const [convocatorias, setConvocatorias] = useState<string[]>([]);
   const [fetchError, setFetchError]     = useState("");
   const [tableWidth, setTableWidth]     = useState(0);
   const searchTimeout                   = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -44,12 +42,6 @@ export default function CarteraPreventivaView() {
   const fixedScrollRef                  = useRef<HTMLDivElement>(null);
 
   const PAGE_SIZE = 100;
-
-  const fetchConvocatorias = useCallback(async () => {
-    const res  = await fetch("/api/cartera-preventiva/convocatorias");
-    const json: string[] = await res.json();
-    setConvocatorias(Array.isArray(json) ? json : []);
-  }, []);
 
   const fetchData = useCallback(async (currentPage = 1) => {
     if (abortControllerRef.current) abortControllerRef.current.abort();
@@ -60,7 +52,6 @@ export default function CarteraPreventivaView() {
     setFetchError("");
     const params = new URLSearchParams();
     if (search)       params.set("search", search);
-    if (convocatoria) params.set("convocatoria", convocatoria);
     if (estado !== "todas") params.set("estado", estado);
     if (vencFrom)     params.set("venc_from", vencFrom);
     if (vencTo)       params.set("venc_to", vencTo);
@@ -78,11 +69,7 @@ export default function CarteraPreventivaView() {
     } finally {
       setLoading(false);
     }
-  }, [search, convocatoria, estado, vencFrom, vencTo]);
-
-  useEffect(() => {
-    fetchConvocatorias();
-  }, [fetchConvocatorias]);
+  }, [search, estado, vencFrom, vencTo]);
 
   useEffect(() => {
     if (searchTimeout.current) clearTimeout(searchTimeout.current);
@@ -91,7 +78,7 @@ export default function CarteraPreventivaView() {
       fetchData(1);
     }, 400);
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
-  }, [search, convocatoria, estado, vencFrom, vencTo, fetchData]);
+  }, [search, estado, vencFrom, vencTo, fetchData]);
 
   useEffect(() => {
     const tableEl = tableContainerRef.current;
@@ -177,16 +164,6 @@ export default function CarteraPreventivaView() {
             />
           </div>
           <select
-            value={convocatoria}
-            onChange={(e) => { setConvocatoria(e.target.value); setPage(1); }}
-            className={INPUT}
-          >
-            <option value="" className="text-gray-900">Todas las convocatorias</option>
-            {convocatorias.map((c) => (
-              <option key={c} value={c} className="text-gray-900">{c}</option>
-            ))}
-          </select>
-          <select
             value={estado}
             onChange={(e) => { setEstado(e.target.value); setPage(1); }}
             className={INPUT}
@@ -206,9 +183,9 @@ export default function CarteraPreventivaView() {
             <input type="date" value={vencTo} onChange={(e) => { setVencTo(e.target.value); setPage(1); }}
               className={`${INPUT} py-1`} />
           </div>
-          {(search || convocatoria || estado !== "todas" || vencFrom || vencTo) && (
+          {(search || estado !== "todas" || vencFrom || vencTo) && (
             <button
-              onClick={() => { setSearch(""); setConvocatoria(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPage(1); }}
+              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPage(1); }}
               className="text-red-500 hover:text-red-700 text-xs underline"
             >
               Limpiar filtros
