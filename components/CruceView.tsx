@@ -135,6 +135,7 @@ type CruceRow = {
   nombre: string | null;
   metodo_de_pago: string | null;
   ci: string | null;
+  cruce: string | null;
 };
 
 export default function CruceView() {
@@ -150,6 +151,7 @@ export default function CruceView() {
   const [payTo, setPayTo]                 = useSessionState("cruce.payTo", "");
   const [regFrom, setRegFrom]             = useSessionState("cruce.regFrom", "");
   const [regTo, setRegTo]                 = useSessionState("cruce.regTo", "");
+  const [sinCrucePreventiva, setSinCrucePreventiva] = useSessionState("cruce.sinCrucePreventiva", false);
   const [methods, setMethods]             = useState<{ label: string; value: string }[]>([]);
   const [fetchError, setFetchError]       = useState("");
   const [tableWidth, setTableWidth]       = useState(0);
@@ -197,6 +199,7 @@ export default function CruceView() {
     if (payTo)          params.set("pay_to", payTo);
     if (regFrom)        params.set("reg_from", regFrom);
     if (regTo)          params.set("reg_to", regTo);
+    if (sinCrucePreventiva) params.set("sin_cruce_preventiva", "1");
     params.set("page", String(currentPage));
 
     try {
@@ -211,7 +214,7 @@ export default function CruceView() {
     } finally {
       setLoading(false);
     }
-  }, [search, paymentMethod, payFrom, payTo, regFrom, regTo]);
+  }, [search, paymentMethod, payFrom, payTo, regFrom, regTo, sinCrucePreventiva]);
 
   useEffect(() => {
     fetchMethods();
@@ -224,7 +227,7 @@ export default function CruceView() {
       fetchData(1);
     }, 400);
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
-  }, [search, paymentMethod, payFrom, payTo, regFrom, regTo, fetchData]);
+  }, [search, paymentMethod, payFrom, payTo, regFrom, regTo, sinCrucePreventiva, fetchData]);
 
   useEffect(() => {
     const tableEl = tableContainerRef.current;
@@ -344,9 +347,18 @@ export default function CruceView() {
             <input type="date" value={regTo} onChange={(e) => { setRegTo(e.target.value); setPage(1); }}
               className={`${INPUT} py-1`} />
           </div>
-          {(search || paymentMethod || payFrom || payTo || regFrom || regTo) && (
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={sinCrucePreventiva}
+              onChange={(e) => { setSinCrucePreventiva(e.target.checked); setPage(1); }}
+              className="rounded border-gray-300 text-brand-600 focus:ring-brand-500/50"
+            />
+            <span className="font-medium">Sin cruce con Cartera Preventiva</span>
+          </label>
+          {(search || paymentMethod || payFrom || payTo || regFrom || regTo || sinCrucePreventiva) && (
             <button
-              onClick={() => { setSearch(""); setPaymentMethod(""); setPayFrom(""); setPayTo(""); setRegFrom(""); setRegTo(""); setPage(1); }}
+              onClick={() => { setSearch(""); setPaymentMethod(""); setPayFrom(""); setPayTo(""); setRegFrom(""); setRegTo(""); setSinCrucePreventiva(false); setPage(1); }}
               className="text-red-500 hover:text-red-700 text-xs underline"
             >
               Limpiar filtros
@@ -384,13 +396,14 @@ export default function CruceView() {
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Nombre</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Método de Pago</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">CI</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Cruce</th>
               </tr>
             </thead>
             <tbody key={page} className="divide-y divide-gray-100 animate-fade-in">
               {loading && data.length === 0 ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 14 }).map((_, j) => (
+                    {Array.from({ length: 15 }).map((_, j) => (
                       <td key={j} className="px-4 py-3">
                         <div className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * j * 7) % 40}%` }} />
                       </td>
@@ -399,7 +412,7 @@ export default function CruceView() {
                 ))
               ) : data.length === 0 ? (
                 <tr>
-                  <td colSpan={14} className="text-center py-12 text-gray-400">No hay registros</td>
+                  <td colSpan={15} className="text-center py-12 text-gray-400">No hay registros</td>
                 </tr>
               ) : (
                 data.map((row) => (
@@ -422,6 +435,7 @@ export default function CruceView() {
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.nombre)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.metodo_de_pago)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.ci)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cruce)}</td>
                   </tr>
                 ))
               )}

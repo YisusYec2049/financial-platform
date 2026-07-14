@@ -14,6 +14,7 @@ export async function GET(req: NextRequest) {
   const payTo         = searchParams.get("pay_to") || "";
   const regFrom       = searchParams.get("reg_from") || "";
   const regTo         = searchParams.get("reg_to") || "";
+  const sinCrucePreventiva = searchParams.get("sin_cruce_preventiva") === "1";
   const page          = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const pageSize      = 100;
   const offset        = (page - 1) * pageSize;
@@ -43,6 +44,14 @@ export async function GET(req: NextRequest) {
   if (regFrom) query = query.gte("registration_date", regFrom);
   if (regTo)   query = query.lte("registration_date", regTo);
 
+  if (sinCrucePreventiva) {
+    query = query
+      .eq("estado_cruce", "cruzado")
+      .not("incp", "is", null)
+      .neq("incp", "")
+      .or("cruce.is.null,cruce.eq.");
+  }
+
   query = query
     .order("payment_date", { ascending: false })
     .range(offset, offset + pageSize - 1);
@@ -54,7 +63,7 @@ export async function GET(req: NextRequest) {
   logAudit({
     user_email: user.email ?? "unknown",
     action: "query",
-    filters: { search, paymentMethod, payFrom, payTo, regFrom, regTo, page, view: "cruce" },
+    filters: { search, paymentMethod, payFrom, payTo, regFrom, regTo, sinCrucePreventiva, page, view: "cruce" },
     result_count: count ?? 0,
   });
 

@@ -23,6 +23,7 @@ type ExcepcionRow = {
   nombre: string | null;
   metodo_de_pago: string | null;
   ci: string | null;
+  cruce: string | null;
   excepcion_motivo: string | null;
 };
 
@@ -694,6 +695,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Nombre</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Método de Pago</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">CI</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Cruce</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Excepción</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Acciones</th>
               </tr>
@@ -702,7 +704,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
               {loading && data.length === 0 ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 16 }).map((_, j) => (
+                    {Array.from({ length: 17 }).map((_, j) => (
                       <td key={j} className="px-4 py-3">
                         <div className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * j * 7) % 40}%` }} />
                       </td>
@@ -711,7 +713,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                 ))
               ) : data.length === 0 ? (
                 <tr>
-                  <td colSpan={16} className="text-center py-12 text-gray-400">No hay excepciones pendientes</td>
+                  <td colSpan={17} className="text-center py-12 text-gray-400">No hay excepciones pendientes</td>
                 </tr>
               ) : (
                 groupedRows.map(({ row, grouped }) => {
@@ -817,6 +819,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                         <span className="text-gray-700 whitespace-nowrap">{fmt(row.ci)}</span>
                       )}
                     </td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cruce)}</td>
                     <td className="px-4 py-2.5">
                       <span className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${row.excepcion_motivo ? MOTIVO_BADGE[row.excepcion_motivo] ?? "bg-gray-100 text-gray-700" : "bg-gray-100 text-gray-700"}`}>
                         {row.excepcion_motivo ? MOTIVO_LABEL[row.excepcion_motivo] ?? row.excepcion_motivo : "—"}
