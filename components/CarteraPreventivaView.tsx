@@ -40,6 +40,8 @@ export default function CarteraPreventivaView() {
   const [estado, setEstado]             = useSessionState("cartera_preventiva.estado", "todas");
   const [vencFrom, setVencFrom]         = useSessionState("cartera_preventiva.vencFrom", "");
   const [vencTo, setVencTo]             = useSessionState("cartera_preventiva.vencTo", "");
+  const [pagoParcial, setPagoParcial]   = useSessionState("cartera_preventiva.pagoParcial", false);
+  const [conExcedente, setConExcedente] = useSessionState("cartera_preventiva.conExcedente", false);
   const [fetchError, setFetchError]     = useState("");
   const [tableWidth, setTableWidth]     = useState(0);
   const searchTimeout                   = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -61,6 +63,8 @@ export default function CarteraPreventivaView() {
     if (estado !== "todas") params.set("estado", estado);
     if (vencFrom)     params.set("venc_from", vencFrom);
     if (vencTo)       params.set("venc_to", vencTo);
+    if (pagoParcial)  params.set("pago_parcial", "1");
+    if (conExcedente) params.set("con_excedente", "1");
     params.set("page", String(currentPage));
 
     try {
@@ -75,7 +79,7 @@ export default function CarteraPreventivaView() {
     } finally {
       setLoading(false);
     }
-  }, [search, estado, vencFrom, vencTo]);
+  }, [search, estado, vencFrom, vencTo, pagoParcial, conExcedente]);
 
   useEffect(() => {
     if (searchTimeout.current) clearTimeout(searchTimeout.current);
@@ -84,7 +88,7 @@ export default function CarteraPreventivaView() {
       fetchData(1);
     }, 400);
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
-  }, [search, estado, vencFrom, vencTo, fetchData]);
+  }, [search, estado, vencFrom, vencTo, pagoParcial, conExcedente, fetchData]);
 
   useEffect(() => {
     const tableEl = tableContainerRef.current;
@@ -142,6 +146,9 @@ export default function CarteraPreventivaView() {
     return <span className="bg-gray-100 text-gray-500 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">—</span>;
   };
 
+  const isPagoParcial = (row: CarteraPreventivaRow) => row.diferencia != null && row.diferencia < 0;
+  const isExcedente = (row: CarteraPreventivaRow) => !!row.correo_elec && row.correo_elec.toUpperCase().includes("SOBRANTE");
+
   const rowTint = (row: CarteraPreventivaRow) => {
     if (!row.fecha_pago) return "";
     if (row.diferencia === 0) return "bg-emerald-50/30";
@@ -189,9 +196,27 @@ export default function CarteraPreventivaView() {
             <input type="date" value={vencTo} onChange={(e) => { setVencTo(e.target.value); setPage(1); }}
               className={`${INPUT} py-1`} />
           </div>
-          {(search || estado !== "todas" || vencFrom || vencTo) && (
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={pagoParcial}
+              onChange={(e) => { setPagoParcial(e.target.checked); setPage(1); }}
+              className="rounded border-gray-300 text-brand-600 focus:ring-brand-500/50"
+            />
+            <span className="font-medium">Solo pago parcial</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={conExcedente}
+              onChange={(e) => { setConExcedente(e.target.checked); setPage(1); }}
+              className="rounded border-gray-300 text-brand-600 focus:ring-brand-500/50"
+            />
+            <span className="font-medium">Con excedente sin cuota</span>
+          </label>
+          {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || conExcedente) && (
             <button
-              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPage(1); }}
+              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setConExcedente(false); setPage(1); }}
               className="text-red-500 hover:text-red-700 text-xs underline"
             >
               Limpiar filtros
@@ -252,7 +277,10 @@ export default function CarteraPreventivaView() {
                   <td colSpan={19} className="text-center py-12 text-gray-400">No hay registros</td>
                 </tr>
               ) : (
-                data.map((row) => (
+                data.map((row) => {
+                  const parcial = isPagoParcial(row);
+                  const excedente = isExcedente(row);
+                  return (
                   <tr key={row.id} className={`hover:bg-gray-50/70 transition-colors duration-100 ${rowTint(row)}`}>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.llave)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.sistema_financiero)}</td>
@@ -269,12 +297,23 @@ export default function CarteraPreventivaView() {
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.valor_pago)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.codigo_transaccion_1)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.codigo_transaccion_2)}</td>
-                    <td className="px-4 py-2.5 text-gray-500 text-xs">{fmt(row.correo_elec)}</td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.diferencia)}</td>
+                    <td className={`px-4 py-2.5 text-xs ${excedente ? "bg-indigo-50/60" : ""}`}>
+                      <div className="flex items-center gap-1">
+                        {excedente && <span title="Excedente sin cuota registrada" className="text-indigo-600">⚠️</span>}
+                        <span className="text-gray-500">{fmt(row.correo_elec)}</span>
+                      </div>
+                    </td>
+                    <td className={`px-4 py-2.5 text-gray-700 whitespace-nowrap ${parcial ? "bg-orange-50/60" : ""}`}>
+                      <div className="flex items-center gap-1">
+                        {parcial && <span title="Pago parcial: queda saldo pendiente" className="text-orange-600 text-xs">⚠️</span>}
+                        <span>{fmtMonto(row.diferencia)}</span>
+                      </div>
+                    </td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cruce_access)}</td>
                     <td className="px-4 py-2.5">{paymentBadge(row)}</td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

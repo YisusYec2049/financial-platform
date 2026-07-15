@@ -12,6 +12,8 @@ export async function GET(req: NextRequest) {
   const estado       = searchParams.get("estado") || "todas";
   const vencFrom     = searchParams.get("venc_from") || "";
   const vencTo       = searchParams.get("venc_to") || "";
+  const pagoParcial  = searchParams.get("pago_parcial") === "1";
+  const conExcedente = searchParams.get("con_excedente") === "1";
   const page          = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const pageSize      = 100;
   const offset        = (page - 1) * pageSize;
@@ -31,6 +33,9 @@ export async function GET(req: NextRequest) {
   if (vencFrom) query = query.gte("fecha_vencimiento", vencFrom);
   if (vencTo)   query = query.lte("fecha_vencimiento", vencTo);
 
+  if (pagoParcial)  query = query.lt("diferencia", 0);
+  if (conExcedente) query = query.ilike("correo_elec", "%SOBRANTE%");
+
   query = query
     .order("fecha_vencimiento", { ascending: true })
     .range(offset, offset + pageSize - 1);
@@ -42,7 +47,7 @@ export async function GET(req: NextRequest) {
   logAudit({
     user_email: user.email ?? "unknown",
     action: "query",
-    filters: { search, estado, vencFrom, vencTo, page, view: "cartera_preventiva" },
+    filters: { search, estado, vencFrom, vencTo, pagoParcial, conExcedente, page, view: "cartera_preventiva" },
     result_count: count ?? 0,
   });
 
