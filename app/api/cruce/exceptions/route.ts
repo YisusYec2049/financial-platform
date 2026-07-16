@@ -89,9 +89,10 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "matching_key es requerido" }, { status: 400 });
   }
 
+  const now = new Date().toISOString();
   const update = noIdentificable
-    ? { estado_cruce: "no_identificable" }
-    : { incp, correo_2: correo2, nombre, metodo_de_pago: metodoDePago, ci, estado_cruce: "cruzado" };
+    ? { estado_cruce: "no_identificable", corregido_manual: true, corregido_manual_at: now }
+    : { incp, correo_2: correo2, nombre, metodo_de_pago: metodoDePago, ci, estado_cruce: "cruzado", corregido_manual: true, corregido_manual_at: now };
 
   const supabase = createAdminClient();
   const { error, data } = await supabase

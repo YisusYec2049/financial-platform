@@ -38,6 +38,7 @@ const MOTIVO_LABEL: Record<string, string> = {
   cruce_discrepante: "Discrepante",
   sin_identificar_pagador: "Pagador sin identificar",
   cruce_unico: "Solo Correo(2) (sin INCP)",
+  pendiente_asignar_incp: "Pendiente de asignar INCP",
 };
 
 const MOTIVO_BADGE: Record<string, string> = {
@@ -46,6 +47,7 @@ const MOTIVO_BADGE: Record<string, string> = {
   cruce_discrepante: "bg-purple-50 text-purple-700",
   sin_identificar_pagador: "bg-blue-50 text-blue-700",
   cruce_unico: "bg-teal-50 text-teal-700",
+  pendiente_asignar_incp: "bg-indigo-50 text-indigo-700",
 };
 
 const NOTA_FUENTE_LABEL: Record<string, string> = {
@@ -582,6 +584,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
             <option value="cruce_discrepante" className="text-gray-900">Discrepante (INCP ≠ Correo(2))</option>
             <option value="sin_identificar_pagador" className="text-gray-900">Pagador sin identificar</option>
             <option value="cruce_unico" className="text-gray-900">Solo Correo(2) (sin INCP)</option>
+            <option value="pendiente_asignar_incp" className="text-gray-900">Pendiente de asignar INCP</option>
           </select>
           <div className="relative w-64">
             <input
@@ -679,8 +682,8 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
       <div className={`${PANEL} animate-fade-in [animation-delay:60ms] overflow-hidden`}>
         <div ref={tableContainerRef} className="overflow-x-auto">
           <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="bg-gray-50/80 text-gray-500 text-left">
+            <thead className="sticky top-0 z-10">
+              <tr className="bg-gray-50 text-gray-500 text-left border-b border-black/[0.06]">
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Documento</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Fecha Pago</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 1</th>
@@ -723,6 +726,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                   const isDiscrepante = row.excepcion_motivo === "cruce_discrepante";
                   const isSinIdentificarPagador = row.excepcion_motivo === "sin_identificar_pagador";
                   const isCruceUnico = row.excepcion_motivo === "cruce_unico";
+                  const isPendienteAsignarIncp = row.excepcion_motivo === "pendiente_asignar_incp";
                   return (
                     <tr
                       key={row.matching_key}
@@ -733,6 +737,8 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                           ? "bg-blue-50/40 border-l-2 border-l-blue-400"
                           : isCruceUnico
                           ? "bg-teal-50/40 border-l-2 border-l-teal-400"
+                          : isPendienteAsignarIncp
+                          ? "bg-indigo-50/40 border-l-2 border-l-indigo-400"
                           : grouped
                           ? "bg-amber-50/40 border-l-2 border-l-amber-400"
                           : ""
@@ -751,17 +757,18 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.program)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.phone)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.payment_amount)}</td>
-                    <td className={`px-4 py-2.5 ${isDiscrepante ? "bg-purple-50/60" : isCruceUnico ? "bg-teal-50/60" : ""}`}>
+                    <td className={`px-4 py-2.5 ${isDiscrepante ? "bg-purple-50/60" : isCruceUnico ? "bg-teal-50/60" : isPendienteAsignarIncp ? "bg-indigo-50/60" : ""}`}>
                       <div className="flex items-center gap-1">
                         {isDiscrepante && <span title="Discrepa con Correo(2)" className="text-purple-600 text-xs">⚠️</span>}
                         {isCruceUnico && <span title="Sin INCP identificado" className="text-teal-600 text-xs">⚠️</span>}
+                        {isPendienteAsignarIncp && <span title="Correo/nombre registrado, falta que el equipo asigne el INCP" className="text-indigo-600 text-xs">⚠️</span>}
                         <input
                           type="text"
                           value={edit.incp}
                           onChange={(e) => setEdit(row.matching_key, "incp", e.target.value, row)}
                           disabled={saving}
                           className={`w-28 border rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100 ${
-                            isDiscrepante ? "border-purple-400" : isCruceUnico ? "border-teal-400" : "border-gray-300"
+                            isDiscrepante ? "border-purple-400" : isCruceUnico ? "border-teal-400" : isPendienteAsignarIncp ? "border-indigo-400" : "border-gray-300"
                           }`}
                         />
                       </div>

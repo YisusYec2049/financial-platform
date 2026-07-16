@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import * as XLSX from "xlsx";
 import { useSidebar } from "@/components/SidebarContext";
 import { useSessionState } from "@/lib/useSessionState";
 
@@ -42,12 +43,18 @@ export default function CarteraPreventivaView() {
   const [vencTo, setVencTo]             = useSessionState("cartera_preventiva.vencTo", "");
   const [pagoParcial, setPagoParcial]   = useSessionState("cartera_preventiva.pagoParcial", false);
   const [conExcedente, setConExcedente] = useSessionState("cartera_preventiva.conExcedente", false);
+  const [medioPago, setMedioPago]       = useSessionState("cartera_preventiva.medioPago", "");
+  const [payFrom, setPayFrom]           = useSessionState("cartera_preventiva.payFrom", "");
+  const [payTo, setPayTo]               = useSessionState("cartera_preventiva.payTo", "");
+  const [medios, setMedios]             = useState<string[]>([]);
   const [fetchError, setFetchError]     = useState("");
   const [tableWidth, setTableWidth]     = useState(0);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
   const searchTimeout                   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef              = useRef<AbortController | null>(null);
   const tableContainerRef               = useRef<HTMLDivElement>(null);
   const fixedScrollRef                  = useRef<HTMLDivElement>(null);
+  const dropdownRef                     = useRef<HTMLDivElement>(null);
 
   const PAGE_SIZE = 100;
 
@@ -65,6 +72,9 @@ export default function CarteraPreventivaView() {
     if (vencTo)       params.set("venc_to", vencTo);
     if (pagoParcial)  params.set("pago_parcial", "1");
     if (conExcedente) params.set("con_excedente", "1");
+    if (medioPago)    params.set("medio_pago", medioPago);
+    if (payFrom)      params.set("pay_from", payFrom);
+    if (payTo)        params.set("pay_to", payTo);
     params.set("page", String(currentPage));
 
     try {
@@ -79,7 +89,17 @@ export default function CarteraPreventivaView() {
     } finally {
       setLoading(false);
     }
-  }, [search, estado, vencFrom, vencTo, pagoParcial, conExcedente]);
+  }, [search, estado, vencFrom, vencTo, pagoParcial, conExcedente, medioPago, payFrom, payTo]);
+
+  const fetchMedios = useCallback(async () => {
+    const res  = await fetch("/api/cartera-preventiva/medios-pago");
+    const raw: string[] = await res.json();
+    setMedios(raw);
+  }, []);
+
+  useEffect(() => {
+    fetchMedios();
+  }, [fetchMedios]);
 
   useEffect(() => {
     if (searchTimeout.current) clearTimeout(searchTimeout.current);
@@ -88,7 +108,7 @@ export default function CarteraPreventivaView() {
       fetchData(1);
     }, 400);
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
-  }, [search, estado, vencFrom, vencTo, pagoParcial, conExcedente, fetchData]);
+  }, [search, estado, vencFrom, vencTo, pagoParcial, conExcedente, medioPago, payFrom, payTo, fetchData]);
 
   useEffect(() => {
     const tableEl = tableContainerRef.current;
@@ -118,6 +138,93 @@ export default function CarteraPreventivaView() {
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
   }, [data]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const buildDownloadParams = () => {
+    const params = new URLSearchParams();
+    if (search)       params.set("search", search);
+    if (estado !== "todas") params.set("estado", estado);
+    if (vencFrom)     params.set("venc_from", vencFrom);
+    if (vencTo)       params.set("venc_to", vencTo);
+    if (pagoParcial)  params.set("pago_parcial", "1");
+    if (conExcedente) params.set("con_excedente", "1");
+    if (medioPago)    params.set("medio_pago", medioPago);
+    if (payFrom)      params.set("pay_from", payFrom);
+    if (payTo)        params.set("pay_to", payTo);
+    return params;
+  };
+
+  const downloadExcel = async () => {
+    setDropdownOpen(false);
+    setLoading(true);
+    setFetchError("");
+    try {
+      const res  = await fetch(`/api/cartera-preventiva/download?${buildDownloadParams()}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al descargar");
+      const allRows = json.data || [];
+      if (json.truncated) {
+        setFetchError("Se descargaron las primeras 50,000 filas. Usa los filtros para acotar la búsqueda.");
+      }
+      const ws = XLSX.utils.json_to_sheet(allRows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Cartera Preventiva");
+      XLSX.writeFile(wb, `cartera_preventiva_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : "Error al descargar el archivo");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const downloadCSV = async () => {
+    setDropdownOpen(false);
+    setLoading(true);
+    setFetchError("");
+    try {
+      const res  = await fetch(`/api/cartera-preventiva/download?${buildDownloadParams()}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al descargar");
+      if (json.truncated) {
+        setFetchError("Se descargaron las primeras 50,000 filas. Usa los filtros para acotar la búsqueda.");
+      }
+      const rows: Record<string, unknown>[] = json.data || [];
+      if (rows.length === 0) return;
+
+      const headers = Object.keys(rows[0]);
+      const csvLines = [
+        headers.join(","),
+        ...rows.map((row) =>
+          headers.map((h) => {
+            const val = row[h] ?? "";
+            const str = String(val).replace(/"/g, '""');
+            return str.includes(",") || str.includes("\n") || str.includes('"') ? `"${str}"` : str;
+          }).join(",")
+        ),
+      ];
+
+      const blob = new Blob([csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      a.download = `cartera_preventiva_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : "Error al descargar el archivo");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
@@ -185,6 +292,16 @@ export default function CarteraPreventivaView() {
             <option value="pendiente" className="text-gray-900">Pendiente</option>
             <option value="resuelta" className="text-gray-900">Resuelta</option>
           </select>
+          <select
+            value={medioPago}
+            onChange={(e) => { setMedioPago(e.target.value); setPage(1); }}
+            className={INPUT}
+          >
+            <option value="" className="text-gray-900">Todos los medios de pago</option>
+            {medios.map((m) => (
+              <option key={m} value={m} className="text-gray-900">{m}</option>
+            ))}
+          </select>
         </div>
 
         <div className="flex gap-6 flex-wrap text-sm text-gray-600 items-center">
@@ -194,6 +311,14 @@ export default function CarteraPreventivaView() {
               className={`${INPUT} py-1`} />
             <span>→</span>
             <input type="date" value={vencTo} onChange={(e) => { setVencTo(e.target.value); setPage(1); }}
+              className={`${INPUT} py-1`} />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="font-medium">Fecha Pago</span>
+            <input type="date" value={payFrom} onChange={(e) => { setPayFrom(e.target.value); setPage(1); }}
+              className={`${INPUT} py-1`} />
+            <span>→</span>
+            <input type="date" value={payTo} onChange={(e) => { setPayTo(e.target.value); setPage(1); }}
               className={`${INPUT} py-1`} />
           </div>
           <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -214,9 +339,9 @@ export default function CarteraPreventivaView() {
             />
             <span className="font-medium">Con excedente sin cuota</span>
           </label>
-          {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || conExcedente) && (
+          {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || conExcedente || medioPago || payFrom || payTo) && (
             <button
-              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setConExcedente(false); setPage(1); }}
+              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setConExcedente(false); setMedioPago(""); setPayFrom(""); setPayTo(""); setPage(1); }}
               className="text-red-500 hover:text-red-700 text-xs underline"
             >
               Limpiar filtros
@@ -225,8 +350,42 @@ export default function CarteraPreventivaView() {
         </div>
       </div>
 
-      <div className="px-1 text-sm text-gray-500">
-        {loading ? "Cargando..." : `${total.toLocaleString("es-CO")} registros encontrados`}
+      <div className="px-1 flex items-center justify-between gap-3">
+        <span className="text-sm text-gray-500">
+          {loading ? "Cargando..." : `${total.toLocaleString("es-CO")} registros encontrados`}
+        </span>
+
+        <div ref={dropdownRef} className="relative">
+          <button
+            onClick={() => setDropdownOpen((o) => !o)}
+            disabled={loading || total === 0}
+            className="flex items-center gap-1.5 bg-brand-600 text-white text-sm px-3.5 py-1.5 rounded-full shadow-sm hover:bg-brand-700 hover:brightness-105 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Descargar
+            <svg className={`w-3 h-3 ml-0.5 transition-transform duration-200 ease-(--ease-spring) ${dropdownOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {dropdownOpen && (
+            <div className="animate-pop-in origin-top-right absolute right-0 mt-1.5 w-44 bg-white border border-black/[0.06] rounded-xl shadow-[0_8px_24px_-8px_rgba(0,0,0,0.2)] z-50 overflow-hidden py-1">
+              <button
+                onClick={downloadExcel}
+                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-100"
+              >
+                Descargar Excel
+              </button>
+              <button
+                onClick={downloadCSV}
+                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-100"
+              >
+                Descargar CSV
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {fetchError && (
@@ -238,8 +397,8 @@ export default function CarteraPreventivaView() {
       <div className={`${PANEL} animate-fade-in [animation-delay:100ms] overflow-hidden`}>
         <div ref={tableContainerRef} className="overflow-x-auto">
           <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="bg-gray-50/80 text-gray-500 text-left">
+            <thead className="sticky top-0 z-10">
+              <tr className="bg-gray-50 text-gray-500 text-left border-b border-black/[0.06]">
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Llave</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Sistema Financiero</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Inscrip.</th>
@@ -257,7 +416,7 @@ export default function CarteraPreventivaView() {
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 2</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Correo Electrónico</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Diferencia</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Cruce Access</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Documento</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Estado</th>
               </tr>
             </thead>

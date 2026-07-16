@@ -448,8 +448,8 @@ export default function TransactionsView() {
       <div className={`${PANEL} animate-fade-in [animation-delay:100ms] overflow-hidden`}>
         <div ref={tableContainerRef} className="overflow-x-auto">
           <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="bg-gray-50/80 text-gray-500 text-left">
+            <thead className="sticky top-0 z-10">
+              <tr className="bg-gray-50 text-gray-500 text-left border-b border-black/[0.06]">
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Fecha Registro</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Documento</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Fecha Pago</th>
