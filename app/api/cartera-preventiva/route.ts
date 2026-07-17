@@ -17,6 +17,9 @@ export async function GET(req: NextRequest) {
   const medioPago    = searchParams.get("medio_pago")?.slice(0, 100) || "";
   const payFrom      = searchParams.get("pay_from") || "";
   const payTo        = searchParams.get("pay_to") || "";
+  const cruceFrom    = searchParams.get("cruce_from") || "";
+  const cruceTo      = searchParams.get("cruce_to") || "";
+  const conNotificacion = searchParams.get("con_notificacion") === "1";
   const page          = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const pageSize      = 100;
   const offset        = (page - 1) * pageSize;
@@ -41,6 +44,9 @@ export async function GET(req: NextRequest) {
   if (medioPago)    query = query.eq("medio_pago", medioPago);
   if (payFrom)      query = query.gte("fecha_pago", payFrom);
   if (payTo)        query = query.lte("fecha_pago", payTo);
+  if (cruceFrom)    query = query.gte("fecha_cruce", cruceFrom);
+  if (cruceTo)      query = query.lte("fecha_cruce", cruceTo);
+  if (conNotificacion) query = query.not("notificacion", "is", null).neq("notificacion", "");
 
   query = query
     .order("fecha_vencimiento", { ascending: true })
@@ -53,7 +59,7 @@ export async function GET(req: NextRequest) {
   logAudit({
     user_email: user.email ?? "unknown",
     action: "query",
-    filters: { search, estado, vencFrom, vencTo, pagoParcial, conExcedente, medioPago, payFrom, payTo, page, view: "cartera_preventiva" },
+    filters: { search, estado, vencFrom, vencTo, pagoParcial, conExcedente, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, page, view: "cartera_preventiva" },
     result_count: count ?? 0,
   });
 

@@ -17,6 +17,9 @@ export async function GET(req: NextRequest) {
   const medioPago    = searchParams.get("medio_pago")?.slice(0, 100) || "";
   const payFrom      = searchParams.get("pay_from") || "";
   const payTo        = searchParams.get("pay_to") || "";
+  const cruceFrom    = searchParams.get("cruce_from") || "";
+  const cruceTo      = searchParams.get("cruce_to") || "";
+  const conNotificacion = searchParams.get("con_notificacion") === "1";
 
   const supabase = createAdminClient();
   const MAX_ROWS = 50_000;
@@ -48,6 +51,9 @@ export async function GET(req: NextRequest) {
     if (medioPago)    query = query.eq("medio_pago", medioPago);
     if (payFrom)      query = query.gte("fecha_pago", payFrom);
     if (payTo)        query = query.lte("fecha_pago", payTo);
+    if (cruceFrom)    query = query.gte("fecha_cruce", cruceFrom);
+    if (cruceTo)      query = query.lte("fecha_cruce", cruceTo);
+    if (conNotificacion) query = query.not("notificacion", "is", null).neq("notificacion", "");
 
     const { data, error } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -71,7 +77,7 @@ export async function GET(req: NextRequest) {
   await logAudit({
     user_email: user.email ?? "unknown",
     action: "download",
-    filters: { search, estado, vencFrom, vencTo, pagoParcial, conExcedente, medioPago, payFrom, payTo, view: "cartera_preventiva" },
+    filters: { search, estado, vencFrom, vencTo, pagoParcial, conExcedente, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, view: "cartera_preventiva" },
     result_count: deduped.length,
   });
 

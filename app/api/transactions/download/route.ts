@@ -15,8 +15,23 @@ export async function GET(req: NextRequest) {
   const regTo         = searchParams.get("reg_to") || "";
   const payFrom       = searchParams.get("pay_from") || "";
   const payTo         = searchParams.get("pay_to") || "";
+  const categoria     = searchParams.get("categoria")?.slice(0, 50) || "";
 
   const supabase = createAdminClient();
+
+  let categoriaKeys: string[] | null = null;
+  if (categoria) {
+    const { data: apartados } = await supabase.from("pagos_apartados").select("matching_key, tipo");
+    if (categoria === "normal") {
+      categoriaKeys = (apartados || []).map((a) => a.matching_key);
+    } else {
+      categoriaKeys = (apartados || []).filter((a) => a.tipo === categoria).map((a) => a.matching_key);
+      if (categoriaKeys.length === 0) {
+        return NextResponse.json({ data: [], count: 0, truncated: false });
+      }
+    }
+  }
+
   const MAX_ROWS = 50_000;
   const BATCH = 1000;
   let allData: Record<string, unknown>[] = [];
@@ -31,6 +46,12 @@ export async function GET(req: NextRequest) {
       .select("*")
       .order("registration_date", { ascending: false })
       .range(from, from + batchSize - 1);
+
+    if (categoria === "normal" && categoriaKeys && categoriaKeys.length > 0) {
+      query = query.not("matching_key", "in", `(${categoriaKeys.map((k) => `"${k}"`).join(",")})`);
+    } else if (categoria && categoria !== "normal" && categoriaKeys) {
+      query = query.in("matching_key", categoriaKeys);
+    }
 
     if (search) {
       query = query.or(
@@ -69,7 +90,7 @@ export async function GET(req: NextRequest) {
   await logAudit({
     user_email: user.email ?? "unknown",
     action: "download",
-    filters: { search, paymentMethod, regFrom, regTo, payFrom, payTo },
+    filters: { search, paymentMethod, regFrom, regTo, payFrom, payTo, categoria },
     result_count: deduped.length,
   });
 

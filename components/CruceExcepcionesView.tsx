@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo, forwardRef, useImperativeHandle } from "react";
 import * as XLSX from "xlsx";
-import { useSidebar } from "@/components/SidebarContext";
 import { useSessionState } from "@/lib/useSessionState";
 
 export type CruceExcepcionesViewRef = { refresh: () => void };
@@ -142,7 +141,6 @@ function groupByIncpOrCorreo(rows: ExcepcionRow[]): { row: ExcepcionRow; grouped
 }
 
 const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceExcepcionesView(_props, ref) {
-  const { width: sidebarWidth }           = useSidebar();
   const [data, setData]                   = useState<ExcepcionRow[]>([]);
   const [total, setTotal]                 = useState(0);
   const [page, setPage]                   = useState(1);
@@ -157,7 +155,6 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
   const [regTo, setRegTo]                 = useSessionState("cruce_excepciones.regTo", "");
   const [methods, setMethods]             = useState<{ label: string; value: string }[]>([]);
   const [fetchError, setFetchError]       = useState("");
-  const [tableWidth, setTableWidth]       = useState(0);
   const [edits, setEdits]                 = useState<Record<string, EditState>>({});
   const [rowActionError, setRowActionError] = useState<Record<string, string>>({});
   const [savingKey, setSavingKey]         = useState<string | null>(null);
@@ -170,10 +167,13 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
   const [discardingKey, setDiscardingKey]     = useState<string | null>(null);
   const [notes, setNotes]                     = useState<Record<string, NoteInfo>>({});
   const [noteEdits, setNoteEdits]             = useState<Record<string, string>>({});
+  const [docEdits, setDocEdits]               = useState<Record<string, string>>({});
+  const [docSaving, setDocSaving]             = useState<string | null>(null);
+  const [docMessage, setDocMessage]           = useState<Record<string, string>>({});
+  const [docError, setDocError]               = useState<Record<string, string>>({});
   const searchTimeout                     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef                = useRef<AbortController | null>(null);
   const tableContainerRef                 = useRef<HTMLDivElement>(null);
-  const fixedScrollRef                    = useRef<HTMLDivElement>(null);
   const dropdownRef                       = useRef<HTMLDivElement>(null);
 
   const PAGE_SIZE = 100;
@@ -271,35 +271,6 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
     }, 400);
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
   }, [search, excepcionMotivo, incpCorreo, paymentMethod, payFrom, payTo, regFrom, regTo, fetchData]);
-
-  useEffect(() => {
-    const tableEl = tableContainerRef.current;
-    const fixedEl = fixedScrollRef.current;
-    if (!tableEl || !fixedEl) return;
-
-    let ticking = false;
-    const onTable = () => { if (!ticking) { ticking = true; fixedEl.scrollLeft = tableEl.scrollLeft; ticking = false; } };
-    const onFixed = () => { if (!ticking) { ticking = true; tableEl.scrollLeft = fixedEl.scrollLeft; ticking = false; } };
-
-    tableEl.addEventListener("scroll", onTable, { passive: true });
-    fixedEl.addEventListener("scroll", onFixed, { passive: true });
-    return () => {
-      tableEl.removeEventListener("scroll", onTable);
-      fixedEl.removeEventListener("scroll", onFixed);
-    };
-  }, []);
-
-  useEffect(() => {
-    const tableEl = tableContainerRef.current;
-    if (!tableEl) return;
-    const update = () => {
-      const table = tableEl.querySelector("table");
-      if (table) setTableWidth(table.scrollWidth);
-    };
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, [data]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -554,6 +525,41 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
     }
   };
 
+  // El pipeline corre 1 vez al día; corregir el documento debe poder
+  // reprocesarse de inmediato en vez de esperar al cron (spec §6).
+  const fireTrigger = () => {
+    fetch("/api/cruce/trigger", { method: "POST" }).catch(() => null);
+  };
+
+  const handleSaveDocumento = async (row: ExcepcionRow) => {
+    const nuevo = (docEdits[row.matching_key] ?? row.identification).trim();
+    if (!nuevo || nuevo === row.identification) return;
+    setDocSaving(row.matching_key);
+    setDocError((prev) => ({ ...prev, [row.matching_key]: "" }));
+    setDocMessage((prev) => ({ ...prev, [row.matching_key]: "" }));
+    try {
+      const res  = await fetch("/api/transactions/correct-document", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matching_key: row.matching_key, documento_corregido: nuevo }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al corregir el documento");
+      setData((prev) => prev.map((r) => r.matching_key === row.matching_key ? { ...r, identification: nuevo } : r));
+      setDocEdits((prev) => {
+        const next = { ...prev };
+        delete next[row.matching_key];
+        return next;
+      });
+      setDocMessage((prev) => ({ ...prev, [row.matching_key]: "Documento corregido." }));
+      fireTrigger();
+    } catch (err) {
+      setDocError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setDocSaving(null);
+    }
+  };
+
   const PANEL = "bg-white rounded-2xl border border-black/[0.06] shadow-[0_1px_1px_rgba(0,0,0,0.03),0_8px_20px_-12px_rgba(0,0,0,0.15)]";
   const INPUT = "border border-black/10 bg-gray-50/60 rounded-xl px-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors";
 
@@ -680,7 +686,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
       )}
 
       <div className={`${PANEL} animate-fade-in [animation-delay:60ms] overflow-hidden`}>
-        <div ref={tableContainerRef} className="overflow-x-auto">
+        <div ref={tableContainerRef} className="overflow-auto max-h-[65vh]">
           <table className="w-full text-sm border-collapse">
             <thead className="sticky top-0 z-10">
               <tr className="bg-gray-50 text-gray-500 text-left border-b border-black/[0.06]">
@@ -744,7 +750,38 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                           : ""
                       }`}
                     >
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.identification)}</td>
+                    <td className="px-4 py-2.5">
+                      {(() => {
+                        const docValue = docEdits[row.matching_key] ?? row.identification;
+                        const docChanged = docValue.trim() !== "" && docValue.trim() !== row.identification;
+                        const savingDoc = docSaving === row.matching_key;
+                        return (
+                          <div className="flex flex-col gap-0.5">
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="text"
+                                value={docValue}
+                                onChange={(e) => setDocEdits((prev) => ({ ...prev, [row.matching_key]: e.target.value }))}
+                                disabled={savingDoc}
+                                className="w-28 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                              />
+                              {docChanged && (
+                                <button
+                                  onClick={() => handleSaveDocumento(row)}
+                                  disabled={savingDoc}
+                                  title="Guardar corrección de documento"
+                                  className="text-xs px-1.5 py-1 rounded-lg bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                                >
+                                  ✓
+                                </button>
+                              )}
+                            </div>
+                            {docMessage[row.matching_key] && <span className="text-[11px] text-green-700">{docMessage[row.matching_key]}</span>}
+                            {docError[row.matching_key] && <span className="text-[11px] text-red-600">{docError[row.matching_key]}</span>}
+                          </div>
+                        );
+                      })()}
+                    </td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.payment_date)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_1)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_2)}</td>
@@ -947,14 +984,6 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
             </div>
           </div>
         )}
-      </div>
-
-      <div
-        ref={fixedScrollRef}
-        className="fixed bottom-0 right-0 z-50 bg-white border-t border-black/[0.06] transition-all duration-300 ease-in-out"
-        style={{ left: sidebarWidth, overflowX: "scroll", overflowY: "hidden", height: 20 }}
-      >
-        <div style={{ width: tableWidth, height: 1 }} />
       </div>
     </div>
   );

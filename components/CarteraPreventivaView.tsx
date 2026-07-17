@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
-import { useSidebar } from "@/components/SidebarContext";
 import { useSessionState } from "@/lib/useSessionState";
 
 type CarteraPreventivaRow = {
@@ -29,10 +28,28 @@ type CarteraPreventivaRow = {
   medio_pago: string | null;
   valor_pago: number | null;
   diferencia: number | null;
+  fecha_cruce: string | null;
+  notificacion: string | null;
+};
+
+type PagoAsociable = {
+  matching_key: string;
+  payment_amount: number;
+  payment_date: string;
+  transaction_code_1: string | null;
+  restante: number;
+};
+
+type InscripcionPendiente = {
+  llave: string;
+  inscrip: string;
+  valor_a_cobrar: number;
+  valor_cuota: number;
+  sistema_financiero: string | null;
+  fecha_vencimiento: string;
 };
 
 export default function CarteraPreventivaView() {
-  const { width: sidebarWidth }         = useSidebar();
   const [data, setData]                 = useState<CarteraPreventivaRow[]>([]);
   const [total, setTotal]               = useState(0);
   const [page, setPage]                 = useState(1);
@@ -46,14 +63,28 @@ export default function CarteraPreventivaView() {
   const [medioPago, setMedioPago]       = useSessionState("cartera_preventiva.medioPago", "");
   const [payFrom, setPayFrom]           = useSessionState("cartera_preventiva.payFrom", "");
   const [payTo, setPayTo]               = useSessionState("cartera_preventiva.payTo", "");
+  const [cruceFrom, setCruceFrom]       = useSessionState("cartera_preventiva.cruceFrom", "");
+  const [cruceTo, setCruceTo]           = useSessionState("cartera_preventiva.cruceTo", "");
+  const [conNotificacion, setConNotificacion] = useSessionState("cartera_preventiva.conNotificacion", false);
   const [medios, setMedios]             = useState<string[]>([]);
   const [fetchError, setFetchError]     = useState("");
-  const [tableWidth, setTableWidth]     = useState(0);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [multiInscripcionDocs, setMultiInscripcionDocs] = useState<Set<string>>(new Set());
+  const [asociarOpen, setAsociarOpen]           = useState<Record<string, boolean>>({});
+  const [asociarData, setAsociarData]           = useState<Record<string, { inscripciones: InscripcionPendiente[]; pagos: PagoAsociable[] }>>({});
+  const [asociarLoading, setAsociarLoading]     = useState<Record<string, boolean>>({});
+  const [asociarError, setAsociarError]         = useState<Record<string, string>>({});
+  const [asociarMessage, setAsociarMessage]     = useState<Record<string, string>>({});
+  const [montoOtroValor, setMontoOtroValor]     = useState<Record<string, string>>({});
+  const [cierreOpen, setCierreOpen]             = useState<Record<string, boolean>>({});
+  const [cierreFecha, setCierreFecha]           = useState<Record<string, string>>({});
+  const [cuotaEdits, setCuotaEdits]             = useState<Record<string, string>>({});
+  const [rowSaving, setRowSaving]               = useState<string | null>(null);
+  const [rowMessage, setRowMessage]             = useState<Record<string, string>>({});
+  const [rowError, setRowError]                 = useState<Record<string, string>>({});
   const searchTimeout                   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef              = useRef<AbortController | null>(null);
   const tableContainerRef               = useRef<HTMLDivElement>(null);
-  const fixedScrollRef                  = useRef<HTMLDivElement>(null);
   const dropdownRef                     = useRef<HTMLDivElement>(null);
 
   const PAGE_SIZE = 100;
@@ -75,6 +106,9 @@ export default function CarteraPreventivaView() {
     if (medioPago)    params.set("medio_pago", medioPago);
     if (payFrom)      params.set("pay_from", payFrom);
     if (payTo)        params.set("pay_to", payTo);
+    if (cruceFrom)    params.set("cruce_from", cruceFrom);
+    if (cruceTo)      params.set("cruce_to", cruceTo);
+    if (conNotificacion) params.set("con_notificacion", "1");
     params.set("page", String(currentPage));
 
     try {
@@ -89,7 +123,7 @@ export default function CarteraPreventivaView() {
     } finally {
       setLoading(false);
     }
-  }, [search, estado, vencFrom, vencTo, pagoParcial, conExcedente, medioPago, payFrom, payTo]);
+  }, [search, estado, vencFrom, vencTo, pagoParcial, conExcedente, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion]);
 
   const fetchMedios = useCallback(async () => {
     const res  = await fetch("/api/cartera-preventiva/medios-pago");
@@ -97,9 +131,20 @@ export default function CarteraPreventivaView() {
     setMedios(raw);
   }, []);
 
+  const fetchMultiInscripcion = useCallback(async () => {
+    try {
+      const res  = await fetch("/api/cartera-preventiva/multi-inscripcion");
+      const json = await res.json();
+      if (res.ok) setMultiInscripcionDocs(new Set(json.documentos || []));
+    } catch {
+      // No bloquea la vista si falla — el panel de asociar simplemente no aparecerá.
+    }
+  }, []);
+
   useEffect(() => {
     fetchMedios();
-  }, [fetchMedios]);
+    fetchMultiInscripcion();
+  }, [fetchMedios, fetchMultiInscripcion]);
 
   useEffect(() => {
     if (searchTimeout.current) clearTimeout(searchTimeout.current);
@@ -108,36 +153,8 @@ export default function CarteraPreventivaView() {
       fetchData(1);
     }, 400);
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
-  }, [search, estado, vencFrom, vencTo, pagoParcial, conExcedente, medioPago, payFrom, payTo, fetchData]);
+  }, [search, estado, vencFrom, vencTo, pagoParcial, conExcedente, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, fetchData]);
 
-  useEffect(() => {
-    const tableEl = tableContainerRef.current;
-    const fixedEl = fixedScrollRef.current;
-    if (!tableEl || !fixedEl) return;
-
-    let ticking = false;
-    const onTable = () => { if (!ticking) { ticking = true; fixedEl.scrollLeft = tableEl.scrollLeft; ticking = false; } };
-    const onFixed = () => { if (!ticking) { ticking = true; tableEl.scrollLeft = fixedEl.scrollLeft; ticking = false; } };
-
-    tableEl.addEventListener("scroll", onTable, { passive: true });
-    fixedEl.addEventListener("scroll", onFixed, { passive: true });
-    return () => {
-      tableEl.removeEventListener("scroll", onTable);
-      fixedEl.removeEventListener("scroll", onFixed);
-    };
-  }, []);
-
-  useEffect(() => {
-    const tableEl = tableContainerRef.current;
-    if (!tableEl) return;
-    const update = () => {
-      const table = tableEl.querySelector("table");
-      if (table) setTableWidth(table.scrollWidth);
-    };
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, [data]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -160,6 +177,9 @@ export default function CarteraPreventivaView() {
     if (medioPago)    params.set("medio_pago", medioPago);
     if (payFrom)      params.set("pay_from", payFrom);
     if (payTo)        params.set("pay_to", payTo);
+    if (cruceFrom)    params.set("cruce_from", cruceFrom);
+    if (cruceTo)      params.set("cruce_to", cruceTo);
+    if (conNotificacion) params.set("con_notificacion", "1");
     return params;
   };
 
@@ -240,6 +260,8 @@ export default function CarteraPreventivaView() {
   const PANEL = "bg-white rounded-2xl border border-black/[0.06] shadow-[0_1px_1px_rgba(0,0,0,0.03),0_8px_20px_-12px_rgba(0,0,0,0.15)]";
   const INPUT = "border border-black/10 bg-gray-50/60 rounded-xl px-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors";
 
+  // Diferencia (§4.9): pasa a poder ser positiva (saldo a favor, pagó de más)
+  // con la Fase 8 de matching-test. Antes solo era negativa (debe) o 0 (exacto).
   const paymentBadge = (row: CarteraPreventivaRow) => {
     if (!row.fecha_pago) {
       return <span className="bg-gray-100 text-gray-500 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">Sin pago identificado</span>;
@@ -250,17 +272,136 @@ export default function CarteraPreventivaView() {
     if (row.diferencia != null && row.diferencia < 0) {
       return <span className="bg-orange-50 text-orange-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">Saldo: {fmtMonto(Math.abs(row.diferencia))}</span>;
     }
+    if (row.diferencia != null && row.diferencia > 0) {
+      return <span className="bg-teal-50 text-teal-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">Saldo a favor: {fmtMonto(row.diferencia)}</span>;
+    }
     return <span className="bg-gray-100 text-gray-500 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">—</span>;
   };
 
   const isPagoParcial = (row: CarteraPreventivaRow) => row.diferencia != null && row.diferencia < 0;
+  const isSaldoFavor = (row: CarteraPreventivaRow) => row.diferencia != null && row.diferencia > 0;
   const isExcedente = (row: CarteraPreventivaRow) => !!row.correo_elec && row.correo_elec.toUpperCase().includes("SOBRANTE");
 
   const rowTint = (row: CarteraPreventivaRow) => {
     if (!row.fecha_pago) return "";
     if (row.diferencia === 0) return "bg-emerald-50/30";
     if (row.diferencia != null && row.diferencia < 0) return "bg-orange-50/30";
+    if (row.diferencia != null && row.diferencia > 0) return "bg-teal-50/30";
     return "";
+  };
+
+  // El pipeline corre 1 vez al día; las acciones de confirmación de esta
+  // vista (asociar pago, cerrar cartera, corregir valor cuota) deben poder
+  // reprocesarse de inmediato en vez de esperar al cron (spec §6).
+  const fireTrigger = () => {
+    fetch("/api/cruce/trigger", { method: "POST" }).catch(() => null);
+  };
+
+  const toggleAsociarPanel = async (row: CarteraPreventivaRow) => {
+    const doc = row.cruce_access;
+    const willOpen = !asociarOpen[doc];
+    setAsociarOpen((prev) => ({ ...prev, [doc]: willOpen }));
+    if (willOpen && !asociarData[doc]) {
+      setAsociarLoading((prev) => ({ ...prev, [doc]: true }));
+      setAsociarError((prev) => ({ ...prev, [doc]: "" }));
+      try {
+        const res  = await fetch(`/api/cartera-preventiva/asociar?documento=${encodeURIComponent(doc)}`);
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Error al cargar candidatos");
+        setAsociarData((prev) => ({ ...prev, [doc]: { inscripciones: json.inscripciones || [], pagos: json.pagos || [] } }));
+      } catch (err) {
+        setAsociarError((prev) => ({ ...prev, [doc]: err instanceof Error ? err.message : "Error inesperado" }));
+      } finally {
+        setAsociarLoading((prev) => ({ ...prev, [doc]: false }));
+      }
+    }
+  };
+
+  const handleAsociar = async (doc: string, pago: PagoAsociable, inscripcion: InscripcionPendiente, monto: number) => {
+    const actionKey = `${pago.matching_key}:${inscripcion.llave}`;
+    setRowSaving(actionKey);
+    setAsociarError((prev) => ({ ...prev, [doc]: "" }));
+    try {
+      const res  = await fetch("/api/cartera-preventiva/asociar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matching_key: pago.matching_key, llave: inscripcion.llave, monto }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al asociar");
+      setAsociarData((prev) => {
+        const current = prev[doc];
+        if (!current) return prev;
+        const pagos = current.pagos
+          .map((p) => p.matching_key === pago.matching_key ? { ...p, restante: p.restante - monto } : p)
+          .filter((p) => p.restante > 0.01);
+        return { ...prev, [doc]: { ...current, pagos } };
+      });
+      setAsociarMessage((prev) => ({ ...prev, [doc]: "Asociación guardada. Se aplicará en el próximo cruce." }));
+      fireTrigger();
+    } catch (err) {
+      setAsociarError((prev) => ({ ...prev, [doc]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setRowSaving(null);
+    }
+  };
+
+  const toggleCierrePanel = (row: CarteraPreventivaRow) => {
+    setCierreOpen((prev) => ({ ...prev, [row.llave]: !prev[row.llave] }));
+    if (!cierreFecha[row.llave]) {
+      setCierreFecha((prev) => ({ ...prev, [row.llave]: new Date().toISOString().slice(0, 10) }));
+    }
+  };
+
+  const handleCerrarCartera = async (row: CarteraPreventivaRow) => {
+    const fecha = cierreFecha[row.llave] || new Date().toISOString().slice(0, 10);
+    setRowSaving(row.llave);
+    setRowError((prev) => ({ ...prev, [row.llave]: "" }));
+    try {
+      const valorCuota = Number(cuotaEdits[row.llave] ?? row.valor_cuota);
+      const res  = await fetch("/api/cartera-preventiva/overrides", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          llave: row.llave,
+          cerrado_manual: true,
+          fecha_pago_manual: fecha,
+          medio_pago_manual: "Cartera",
+          valor_pago_manual: valorCuota,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al cerrar la cartera");
+      setRowMessage((prev) => ({ ...prev, [row.llave]: "Cierre guardado. Se reflejará en el próximo cruce." }));
+      setCierreOpen((prev) => ({ ...prev, [row.llave]: false }));
+      fireTrigger();
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setRowSaving(null);
+    }
+  };
+
+  const handleSaveValorCuota = async (row: CarteraPreventivaRow) => {
+    const nuevo = Number(cuotaEdits[row.llave]);
+    if (!Number.isFinite(nuevo) || nuevo === row.valor_cuota) return;
+    setRowSaving(row.llave);
+    setRowError((prev) => ({ ...prev, [row.llave]: "" }));
+    try {
+      const res  = await fetch("/api/cartera-preventiva/overrides", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ llave: row.llave, valor_cuota_manual: nuevo }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al guardar el valor de cuota");
+      setRowMessage((prev) => ({ ...prev, [row.llave]: "Valor de cuota corregido. Se reflejará en el próximo cruce." }));
+      fireTrigger();
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setRowSaving(null);
+    }
   };
 
   return (
@@ -339,9 +480,26 @@ export default function CarteraPreventivaView() {
             />
             <span className="font-medium">Con excedente sin cuota</span>
           </label>
-          {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || conExcedente || medioPago || payFrom || payTo) && (
+          <div className="flex items-center gap-2">
+            <span className="font-medium">Día del Cruce</span>
+            <input type="date" value={cruceFrom} onChange={(e) => { setCruceFrom(e.target.value); setPage(1); }}
+              className={`${INPUT} py-1`} />
+            <span>→</span>
+            <input type="date" value={cruceTo} onChange={(e) => { setCruceTo(e.target.value); setPage(1); }}
+              className={`${INPUT} py-1`} />
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={conNotificacion}
+              onChange={(e) => { setConNotificacion(e.target.checked); setPage(1); }}
+              className="rounded border-gray-300 text-brand-600 focus:ring-brand-500/50"
+            />
+            <span className="font-medium">Con notificación de pago de más</span>
+          </label>
+          {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || conExcedente || medioPago || payFrom || payTo || cruceFrom || cruceTo || conNotificacion) && (
             <button
-              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setConExcedente(false); setMedioPago(""); setPayFrom(""); setPayTo(""); setPage(1); }}
+              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setConExcedente(false); setMedioPago(""); setPayFrom(""); setPayTo(""); setCruceFrom(""); setCruceTo(""); setConNotificacion(false); setPage(1); }}
               className="text-red-500 hover:text-red-700 text-xs underline"
             >
               Limpiar filtros
@@ -395,7 +553,7 @@ export default function CarteraPreventivaView() {
       )}
 
       <div className={`${PANEL} animate-fade-in [animation-delay:100ms] overflow-hidden`}>
-        <div ref={tableContainerRef} className="overflow-x-auto">
+        <div ref={tableContainerRef} className="overflow-auto max-h-[65vh]">
           <table className="w-full text-sm border-collapse">
             <thead className="sticky top-0 z-10">
               <tr className="bg-gray-50 text-gray-500 text-left border-b border-black/[0.06]">
@@ -415,16 +573,18 @@ export default function CarteraPreventivaView() {
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 1</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 2</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Correo Electrónico</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Notificación</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Diferencia</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Documento</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Estado</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Acciones</th>
               </tr>
             </thead>
             <tbody key={page} className="divide-y divide-gray-100 animate-fade-in">
               {loading && data.length === 0 ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 19 }).map((_, j) => (
+                    {Array.from({ length: 21 }).map((_, j) => (
                       <td key={j} className="px-4 py-3">
                         <div className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * j * 7) % 40}%` }} />
                       </td>
@@ -433,21 +593,47 @@ export default function CarteraPreventivaView() {
                 ))
               ) : data.length === 0 ? (
                 <tr>
-                  <td colSpan={19} className="text-center py-12 text-gray-400">No hay registros</td>
+                  <td colSpan={21} className="text-center py-12 text-gray-400">No hay registros</td>
                 </tr>
               ) : (
                 data.map((row) => {
                   const parcial = isPagoParcial(row);
+                  const saldoFavor = isSaldoFavor(row);
                   const excedente = isExcedente(row);
+                  const pendiente = !row.fecha_pago;
+                  const saving = rowSaving === row.llave;
+                  const cuotaValue = cuotaEdits[row.llave] ?? String(row.valor_cuota);
+                  const cuotaChanged = cuotaValue.trim() !== "" && Number(cuotaValue) !== row.valor_cuota && !Number.isNaN(Number(cuotaValue));
+                  const puedeAsociar = multiInscripcionDocs.has(row.cruce_access);
                   return (
-                  <tr key={row.id} className={`hover:bg-gray-50/70 transition-colors duration-100 ${rowTint(row)}`}>
+                  <tr key={row.id} className={`hover:bg-gray-50/70 transition-colors duration-100 align-top ${rowTint(row)}`}>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.llave)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.sistema_financiero)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.inscrip)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cliente)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.moneda)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.fecha_vencimiento)}</td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.valor_cuota)}</td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          value={cuotaValue}
+                          onChange={(e) => setCuotaEdits((prev) => ({ ...prev, [row.llave]: e.target.value }))}
+                          disabled={saving}
+                          className="w-24 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                        />
+                        {cuotaChanged && (
+                          <button
+                            onClick={() => handleSaveValorCuota(row)}
+                            disabled={saving}
+                            title="Guardar corrección de valor de cuota"
+                            className="text-xs px-1.5 py-1 rounded-lg bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                          >
+                            ✓
+                          </button>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.pago)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.valor_a_cobrar)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.programa)}</td>
@@ -462,14 +648,127 @@ export default function CarteraPreventivaView() {
                         <span className="text-gray-500">{fmt(row.correo_elec)}</span>
                       </div>
                     </td>
-                    <td className={`px-4 py-2.5 text-gray-700 whitespace-nowrap ${parcial ? "bg-orange-50/60" : ""}`}>
+                    <td className="px-4 py-2.5 text-gray-500 text-xs whitespace-nowrap">{fmt(row.notificacion)}</td>
+                    <td className={`px-4 py-2.5 text-gray-700 whitespace-nowrap ${parcial ? "bg-orange-50/60" : saldoFavor ? "bg-teal-50/60" : ""}`}>
                       <div className="flex items-center gap-1">
                         {parcial && <span title="Pago parcial: queda saldo pendiente" className="text-orange-600 text-xs">⚠️</span>}
+                        {saldoFavor && <span title="Saldo a favor: pagó de más" className="text-teal-600 text-xs">✓</span>}
                         <span>{fmtMonto(row.diferencia)}</span>
                       </div>
                     </td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cruce_access)}</td>
                     <td className="px-4 py-2.5">{paymentBadge(row)}</td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex flex-col gap-1 min-w-[160px]">
+                        {pendiente && (
+                          <button
+                            onClick={() => toggleCierrePanel(row)}
+                            disabled={saving}
+                            className="text-xs px-2 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                          >
+                            {cierreOpen[row.llave] ? "Ocultar cierre" : "Cerrar cartera"}
+                          </button>
+                        )}
+                        {cierreOpen[row.llave] && (
+                          <div className="animate-fade-in bg-gray-50 border border-gray-200 rounded-lg p-2 space-y-1.5">
+                            <label className="block text-[11px] text-gray-500">Fecha de pago</label>
+                            <input
+                              type="date"
+                              value={cierreFecha[row.llave] || ""}
+                              onChange={(e) => setCierreFecha((prev) => ({ ...prev, [row.llave]: e.target.value }))}
+                              className="w-full border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50"
+                            />
+                            <p className="text-[11px] text-gray-400">Medio: Cartera · Valor: {fmtMonto(Number(cuotaEdits[row.llave] ?? row.valor_cuota))}</p>
+                            <button
+                              onClick={() => handleCerrarCartera(row)}
+                              disabled={saving}
+                              className="w-full text-xs px-2 py-1.5 rounded-lg bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                            >
+                              {saving ? "Guardando..." : "Confirmar cierre"}
+                            </button>
+                          </div>
+                        )}
+                        {puedeAsociar && pendiente && (
+                          <button
+                            onClick={() => toggleAsociarPanel(row)}
+                            disabled={saving}
+                            className="text-xs px-2 py-1 rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                          >
+                            {asociarOpen[row.cruce_access] ? "Ocultar asociar" : "⚠️ Asociar"}
+                          </button>
+                        )}
+                        {asociarOpen[row.cruce_access] && (
+                          <div className="animate-fade-in bg-amber-50/60 border border-amber-200/80 rounded-lg p-2 space-y-1.5 w-64">
+                            {asociarLoading[row.cruce_access] ? (
+                              <p className="text-xs text-gray-500">Cargando...</p>
+                            ) : asociarError[row.cruce_access] ? (
+                              <p className="text-xs text-red-600">{asociarError[row.cruce_access]}</p>
+                            ) : (
+                              <>
+                                <p className="text-[11px] text-amber-800">
+                                  Hay {asociarData[row.cruce_access]?.pagos.length ?? 0} pago(s) de este documento, falta asociar a una inscripción.
+                                </p>
+                                {(asociarData[row.cruce_access]?.pagos || []).map((pago) => (
+                                  <div key={pago.matching_key} className="bg-white border border-gray-200 rounded-lg p-1.5 space-y-1">
+                                    <p className="text-[11px] text-gray-600">
+                                      {fmt(pago.transaction_code_1)} · {fmt(pago.payment_date)} · restante {fmtMonto(pago.restante)}
+                                    </p>
+                                    {(asociarData[row.cruce_access]?.inscripciones || []).map((ins) => {
+                                      const exacto = Math.abs(ins.valor_a_cobrar - pago.restante) < 1;
+                                      const actionKey = `${pago.matching_key}:${ins.llave}`;
+                                      const savingAction = rowSaving === actionKey;
+                                      const otroValorKey = `${pago.matching_key}:${ins.llave}`;
+                                      return (
+                                        <div key={ins.llave} className="flex items-center justify-between gap-1 text-[11px]">
+                                          <span className={exacto ? "text-emerald-700 font-medium" : "text-gray-600"}>
+                                            {ins.inscrip} ({fmt(ins.sistema_financiero)}) — {fmtMonto(ins.valor_a_cobrar)}
+                                            {exacto && " ✓ calza"}
+                                          </span>
+                                          <div className="flex items-center gap-1">
+                                            <button
+                                              onClick={() => handleAsociar(row.cruce_access, pago, ins, pago.restante)}
+                                              disabled={savingAction}
+                                              className="px-1.5 py-0.5 rounded bg-brand-700 text-white hover:bg-brand-800 disabled:opacity-50"
+                                            >
+                                              Todo
+                                            </button>
+                                            <input
+                                              type="number"
+                                              placeholder="otro $"
+                                              value={montoOtroValor[otroValorKey] || ""}
+                                              onChange={(e) => setMontoOtroValor((prev) => ({ ...prev, [otroValorKey]: e.target.value }))}
+                                              className="w-14 border border-gray-300 rounded px-1 py-0.5"
+                                            />
+                                            <button
+                                              onClick={() => {
+                                                const monto = Number(montoOtroValor[otroValorKey]);
+                                                if (Number.isFinite(monto) && monto > 0) handleAsociar(row.cruce_access, pago, ins, monto);
+                                              }}
+                                              disabled={savingAction}
+                                              className="px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                                            >
+                                              OK
+                                            </button>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                ))}
+                                {asociarMessage[row.cruce_access] && (
+                                  <p className="text-[11px] text-green-700">{asociarMessage[row.cruce_access]}</p>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        )}
+                        {rowMessage[row.llave] && <span className="text-[11px] text-green-700">{rowMessage[row.llave]}</span>}
+                        {rowError[row.llave] && <span className="text-[11px] text-red-600">{rowError[row.llave]}</span>}
+                        {!pendiente && !cierreOpen[row.llave] && !rowMessage[row.llave] && (
+                          <span className="text-xs text-gray-400">—</span>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                   );
                 })
@@ -502,14 +801,6 @@ export default function CarteraPreventivaView() {
             </div>
           </div>
         )}
-      </div>
-
-      <div
-        ref={fixedScrollRef}
-        className="fixed bottom-0 right-0 z-50 bg-white border-t border-black/[0.06] transition-all duration-300 ease-in-out"
-        style={{ left: sidebarWidth, overflowX: "scroll", overflowY: "hidden", height: 20 }}
-      >
-        <div style={{ width: tableWidth, height: 1 }} />
       </div>
     </div>
   );

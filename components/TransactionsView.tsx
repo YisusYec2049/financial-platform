@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import * as XLSX from "xlsx";
-import { useSidebar } from "@/components/SidebarContext";
 import { useSessionState } from "@/lib/useSessionState";
 
 type Transaction = {
@@ -20,10 +19,30 @@ type Transaction = {
   payment_amount: number;
   matching_key: string;
   incp: string;
+  categoria: string;
+  alerta_documento_repetido: boolean;
+  alerta_posible_doble_cobro: boolean;
 };
 
+const CATEGORIA_LABEL: Record<string, string> = {
+  normal: "Normal",
+  matricula: "Matrícula",
+  cesantias: "Cesantías",
+  pago_llave: "Pago por llave",
+  cheque: "Cheque",
+};
+
+const CATEGORIA_BADGE: Record<string, string> = {
+  normal: "bg-gray-100 text-gray-600",
+  matricula: "bg-brand-50 text-brand-700",
+  cesantias: "bg-emerald-50 text-emerald-700",
+  pago_llave: "bg-amber-50 text-amber-700",
+  cheque: "bg-rose-50 text-rose-700",
+};
+
+const PAGO_UNICO_THRESHOLD = 2_000_000;
+
 export default function TransactionsView() {
-  const { width: sidebarWidth }           = useSidebar();
   const [data, setData]                   = useState<Transaction[]>([]);
   const [total, setTotal]                 = useState(0);
   const [page, setPage]                   = useState(1);
@@ -34,17 +53,22 @@ export default function TransactionsView() {
   const [regTo, setRegTo]                 = useSessionState("transactions.regTo", "");
   const [payFrom, setPayFrom]             = useSessionState("transactions.payFrom", "");
   const [payTo, setPayTo]                 = useSessionState("transactions.payTo", "");
+  const [categoria, setCategoria]         = useSessionState("transactions.categoria", "");
   const [methods, setMethods]             = useState<{ label: string; value: string }[]>([]);
   const [lastUpdate, setLastUpdate]       = useState<Date | null>(null);
-  const [tableWidth, setTableWidth]       = useState(0);
   const [fetchError, setFetchError]       = useState("");
   const [dropdownOpen, setDropdownOpen]   = useState(false);
   const [newRecords, setNewRecords]       = useState(false);
+  const [docEdits, setDocEdits]           = useState<Record<string, string>>({});
+  const [pagoUnicoChecked, setPagoUnicoChecked] = useState<Record<string, boolean>>({});
+  const [rowSaving, setRowSaving]         = useState<string | null>(null);
+  const [rowMessage, setRowMessage]       = useState<Record<string, string>>({});
+  const [rowError, setRowError]           = useState<Record<string, string>>({});
+  const [removePatternOffer, setRemovePatternOffer] = useState<Record<string, string>>({});
   const dropdownRef                       = useRef<HTMLDivElement>(null);
   const searchTimeout                     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef                = useRef<AbortController | null>(null);
   const tableContainerRef                 = useRef<HTMLDivElement>(null);
-  const fixedScrollRef                    = useRef<HTMLDivElement>(null);
 
   const PAGE_SIZE = 100;
 
@@ -84,6 +108,7 @@ export default function TransactionsView() {
     if (regTo)         params.set("reg_to", regTo);
     if (payFrom)       params.set("pay_from", payFrom);
     if (payTo)         params.set("pay_to", payTo);
+    if (categoria)     params.set("categoria", categoria);
     params.set("page", String(currentPage));
 
     try {
@@ -100,7 +125,7 @@ export default function TransactionsView() {
     } finally {
       setLoading(false);
     }
-  }, [search, paymentMethod, regFrom, regTo, payFrom, payTo]);
+  }, [search, paymentMethod, regFrom, regTo, payFrom, payTo, categoria]);
 
   useEffect(() => {
     fetchMethods();
@@ -113,7 +138,7 @@ export default function TransactionsView() {
       fetchData(1);
     }, 400);
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
-  }, [search, paymentMethod, regFrom, regTo, payFrom, payTo, fetchData]);
+  }, [search, paymentMethod, regFrom, regTo, payFrom, payTo, categoria, fetchData]);
 
   // Polling silencioso cada 30 segundos para detectar nuevos registros
   useEffect(() => {
@@ -126,6 +151,7 @@ export default function TransactionsView() {
         if (regTo)         params.set("reg_to", regTo);
         if (payFrom)       params.set("pay_from", payFrom);
         if (payTo)         params.set("pay_to", payTo);
+        if (categoria)     params.set("categoria", categoria);
         params.set("page", "1");
 
         const res  = await fetch(`/api/transactions?${params}`);
@@ -136,51 +162,8 @@ export default function TransactionsView() {
       }
     }, 30_000);
     return () => clearInterval(interval);
-  }, [search, paymentMethod, regFrom, regTo, payFrom, payTo, total]);
+  }, [search, paymentMethod, regFrom, regTo, payFrom, payTo, categoria, total]);
 
-  // Sincronizar scroll entre tabla y barra fija
-  useEffect(() => {
-    const tableEl = tableContainerRef.current;
-    const fixedEl = fixedScrollRef.current;
-    if (!tableEl || !fixedEl) return;
-
-    let ticking = false;
-
-    const onTable = () => {
-      if (!ticking) {
-        ticking = true;
-        fixedEl.scrollLeft = tableEl.scrollLeft;
-        ticking = false;
-      }
-    };
-    const onFixed = () => {
-      if (!ticking) {
-        ticking = true;
-        tableEl.scrollLeft = fixedEl.scrollLeft;
-        ticking = false;
-      }
-    };
-
-    tableEl.addEventListener("scroll", onTable, { passive: true });
-    fixedEl.addEventListener("scroll", onFixed, { passive: true });
-    return () => {
-      tableEl.removeEventListener("scroll", onTable);
-      fixedEl.removeEventListener("scroll", onFixed);
-    };
-  }, []);
-
-  // Medir el ancho real de la tabla para la barra fija
-  useEffect(() => {
-    const tableEl = tableContainerRef.current;
-    if (!tableEl) return;
-    const update = () => {
-      const table = tableEl.querySelector("table");
-      if (table) setTableWidth(table.scrollWidth);
-    };
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, [data]);
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
@@ -217,6 +200,7 @@ export default function TransactionsView() {
     if (regTo)         params.set("reg_to", regTo);
     if (payFrom)       params.set("pay_from", payFrom);
     if (payTo)         params.set("pay_to", payTo);
+    if (categoria)     params.set("categoria", categoria);
 
     try {
       const res  = await fetch(`/api/transactions/download?${params}`);
@@ -248,6 +232,7 @@ export default function TransactionsView() {
     if (regTo)         params.set("reg_to", regTo);
     if (payFrom)       params.set("pay_from", payFrom);
     if (payTo)         params.set("pay_to", payTo);
+    if (categoria)     params.set("categoria", categoria);
 
     try {
       const res  = await fetch(`/api/transactions/download?${params}`);
@@ -282,6 +267,105 @@ export default function TransactionsView() {
       setFetchError(err instanceof Error ? err.message : "Error al descargar el archivo");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // El pipeline corre 1 vez al día; una acción de confirmación aquí (marcar
+  // matrícula/cesantías, corregir el documento) debe poder reprocesarse de
+  // inmediato en vez de esperar al cron (spec §6). Best-effort: si falla, no
+  // bloquea ni revierte lo ya guardado.
+  const fireTrigger = () => {
+    fetch("/api/cruce/trigger", { method: "POST" }).catch(() => null);
+  };
+
+  const handleMarcar = async (row: Transaction, tipo: "matricula" | "cesantias") => {
+    setRowSaving(row.matching_key);
+    setRowError((prev) => ({ ...prev, [row.matching_key]: "" }));
+    setRowMessage((prev) => ({ ...prev, [row.matching_key]: "" }));
+    try {
+      const res  = await fetch("/api/transactions/mark", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          matching_key: row.matching_key,
+          tipo,
+          es_pago_unico: tipo === "matricula" ? !!pagoUnicoChecked[row.matching_key] : undefined,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al marcar");
+      setData((prev) => prev.map((r) => r.matching_key === row.matching_key ? { ...r, categoria: tipo } : r));
+      setRowMessage((prev) => ({ ...prev, [row.matching_key]: "Marcado. Sale del proceso en el próximo cruce." }));
+      fireTrigger();
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setRowSaving(null);
+    }
+  };
+
+  const handleDesmarcar = async (row: Transaction) => {
+    setRowSaving(row.matching_key);
+    setRowError((prev) => ({ ...prev, [row.matching_key]: "" }));
+    try {
+      const wasCesantias = row.categoria === "cesantias";
+      const res  = await fetch(`/api/pagos-apartados?matching_key=${encodeURIComponent(row.matching_key)}`, { method: "DELETE" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al desmarcar");
+      setData((prev) => prev.map((r) => r.matching_key === row.matching_key ? { ...r, categoria: "normal" } : r));
+      setRowMessage((prev) => ({ ...prev, [row.matching_key]: "Desmarcado. Vuelve al flujo normal." }));
+      if (wasCesantias && row.transaction_code_1) {
+        setRemovePatternOffer((prev) => ({ ...prev, [row.matching_key]: row.transaction_code_1 }));
+      }
+      fireTrigger();
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setRowSaving(null);
+    }
+  };
+
+  const handleRemovePattern = async (matchingKey: string, descripcion: string) => {
+    try {
+      await fetch(`/api/cesantias-patrones?descripcion=${encodeURIComponent(descripcion)}`, { method: "DELETE" });
+      setRowMessage((prev) => ({ ...prev, [matchingKey]: "Desmarcado. Patrón aprendido eliminado." }));
+    } catch {
+      // best-effort
+    } finally {
+      setRemovePatternOffer((prev) => {
+        const next = { ...prev };
+        delete next[matchingKey];
+        return next;
+      });
+    }
+  };
+
+  const handleSaveDocumento = async (row: Transaction) => {
+    const nuevo = (docEdits[row.matching_key] ?? row.identification).trim();
+    if (!nuevo || nuevo === row.identification) return;
+    setRowSaving(row.matching_key);
+    setRowError((prev) => ({ ...prev, [row.matching_key]: "" }));
+    setRowMessage((prev) => ({ ...prev, [row.matching_key]: "" }));
+    try {
+      const res  = await fetch("/api/transactions/correct-document", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matching_key: row.matching_key, documento_corregido: nuevo }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al corregir el documento");
+      setData((prev) => prev.map((r) => r.matching_key === row.matching_key ? { ...r, identification: nuevo } : r));
+      setDocEdits((prev) => {
+        const next = { ...prev };
+        delete next[row.matching_key];
+        return next;
+      });
+      setRowMessage((prev) => ({ ...prev, [row.matching_key]: "Documento corregido. Se recuerda para pagos futuros con el mismo documento." }));
+      fireTrigger();
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setRowSaving(null);
     }
   };
 
@@ -391,6 +475,18 @@ export default function TransactionsView() {
               <option key={m.value} value={m.value} className="text-gray-900">{m.label}</option>
             ))}
           </select>
+          <select
+            value={categoria}
+            onChange={(e) => { setCategoria(e.target.value); setPage(1); }}
+            className={INPUT}
+          >
+            <option value="" className="text-gray-900">Todas las categorías</option>
+            <option value="normal" className="text-gray-900">Normal</option>
+            <option value="matricula" className="text-gray-900">Matrícula</option>
+            <option value="cesantias" className="text-gray-900">Cesantías</option>
+            <option value="pago_llave" className="text-gray-900">Pago por llave</option>
+            <option value="cheque" className="text-gray-900">Cheque</option>
+          </select>
         </div>
 
         <div className="flex gap-6 flex-wrap text-sm text-gray-600 items-center">
@@ -410,9 +506,9 @@ export default function TransactionsView() {
             <input type="date" value={payTo} onChange={(e) => { setPayTo(e.target.value); setPage(1); }}
               className={`${INPUT} py-1`} />
           </div>
-          {(search || paymentMethod || regFrom || regTo || payFrom || payTo) && (
+          {(search || paymentMethod || regFrom || regTo || payFrom || payTo || categoria) && (
             <button
-              onClick={() => { setSearch(""); setPaymentMethod(""); setRegFrom(""); setRegTo(""); setPayFrom(""); setPayTo(""); setPage(1); }}
+              onClick={() => { setSearch(""); setPaymentMethod(""); setRegFrom(""); setRegTo(""); setPayFrom(""); setPayTo(""); setCategoria(""); setPage(1); }}
               className="text-red-500 hover:text-red-700 text-xs underline"
             >
               Limpiar filtros
@@ -446,7 +542,7 @@ export default function TransactionsView() {
 
       {/* Tabla */}
       <div className={`${PANEL} animate-fade-in [animation-delay:100ms] overflow-hidden`}>
-        <div ref={tableContainerRef} className="overflow-x-auto">
+        <div ref={tableContainerRef} className="overflow-auto max-h-[65vh]">
           <table className="w-full text-sm border-collapse">
             <thead className="sticky top-0 z-10">
               <tr className="bg-gray-50 text-gray-500 text-left border-b border-black/[0.06]">
@@ -460,13 +556,15 @@ export default function TransactionsView() {
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Teléfono</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Valor</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Medio de Pago</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Categoría</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Acciones</th>
               </tr>
             </thead>
             <tbody key={page} className="divide-y divide-gray-100 animate-fade-in">
               {loading && data.length === 0 ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 10 }).map((_, j) => (
+                    {Array.from({ length: 12 }).map((_, j) => (
                       <td key={j} className="px-4 py-3">
                         <div className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * j * 7) % 40}%` }} />
                       </td>
@@ -475,27 +573,143 @@ export default function TransactionsView() {
                 ))
               ) : data.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="text-center py-12 text-gray-400">No hay registros</td>
+                  <td colSpan={12} className="text-center py-12 text-gray-400">No hay registros</td>
                 </tr>
               ) : (
-                data.map((row) => (
-                  <tr key={row.id} className="hover:bg-gray-50/70 transition-colors duration-100">
+                data.map((row) => {
+                  const saving = rowSaving === row.matching_key;
+                  const isNormal = row.categoria === "normal";
+                  const patternOffer = removePatternOffer[row.matching_key];
+                  const docValue = docEdits[row.matching_key] ?? row.identification;
+                  const docChanged = docValue.trim() !== "" && docValue.trim() !== row.identification;
+                  return (
+                  <tr key={row.id} className="hover:bg-gray-50/70 transition-colors duration-100 align-top">
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.registration_date)}</td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.identification)}</td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-1">
+                        {row.alerta_posible_doble_cobro && (
+                          <span title="Mismo documento, mismo día y mismo monto: posible doble cobro" className="text-red-600 text-xs">⚠️</span>
+                        )}
+                        {!row.alerta_posible_doble_cobro && row.alerta_documento_repetido && (
+                          <span title="Este documento tiene más de un pago el mismo día" className="text-amber-600 text-xs">⚠️</span>
+                        )}
+                        {row.matching_key?.endsWith("(duplicado)") && (
+                          <span title="Llave duplicada: Bancolombia generó la misma llave para dos pagos el mismo día" className="text-purple-600 text-xs">⚠️</span>
+                        )}
+                        <input
+                          type="text"
+                          value={docValue}
+                          onChange={(e) => setDocEdits((prev) => ({ ...prev, [row.matching_key]: e.target.value }))}
+                          disabled={saving}
+                          className="w-28 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                        />
+                        {docChanged && (
+                          <button
+                            onClick={() => handleSaveDocumento(row)}
+                            disabled={saving}
+                            title="Guardar corrección de documento"
+                            className="text-xs px-1.5 py-1 rounded-lg bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                          >
+                            ✓
+                          </button>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.payment_date)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_1)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_2)}</td>
                     <td className="px-4 py-2.5 text-gray-500 text-xs">{fmt(row.email)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.program)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.phone)}</td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.payment_amount)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">
+                      <div className="flex items-center gap-1">
+                        {fmtMonto(row.payment_amount)}
+                        {row.payment_amount > PAGO_UNICO_THRESHOLD && isNormal && (
+                          <span title="Monto alto: posible pago único / matrícula, solo sugerencia" className="text-brand-600 text-xs">💡</span>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-2.5">
                       <span className="bg-brand-50 text-brand-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">
                         {fmt(row.payment_method)}
                       </span>
                     </td>
+                    <td className="px-4 py-2.5">
+                      <span className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${CATEGORIA_BADGE[row.categoria] ?? "bg-gray-100 text-gray-600"}`}>
+                        {CATEGORIA_LABEL[row.categoria] ?? row.categoria}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex flex-col gap-1 min-w-[150px]">
+                        {isNormal ? (
+                          <>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => handleMarcar(row, "matricula")}
+                                disabled={saving}
+                                className="text-xs px-2 py-1 rounded-lg border border-brand-300 text-brand-700 hover:bg-brand-50 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                              >
+                                Matrícula
+                              </button>
+                              <label className="flex items-center gap-1 text-[11px] text-gray-500 cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  checked={!!pagoUnicoChecked[row.matching_key]}
+                                  onChange={(e) => setPagoUnicoChecked((prev) => ({ ...prev, [row.matching_key]: e.target.checked }))}
+                                  className="rounded border-gray-300 text-brand-600 focus:ring-brand-500/50"
+                                />
+                                único
+                              </label>
+                            </div>
+                            <button
+                              onClick={() => handleMarcar(row, "cesantias")}
+                              disabled={saving}
+                              className="text-xs px-2 py-1 rounded-lg border border-emerald-300 text-emerald-700 hover:bg-emerald-50 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                            >
+                              Cesantías
+                            </button>
+                          </>
+                        ) : (row.categoria === "matricula" || row.categoria === "cesantias") ? (
+                          <button
+                            onClick={() => handleDesmarcar(row)}
+                            disabled={saving}
+                            className="text-xs px-2 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                          >
+                            Desmarcar
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-400">Automático</span>
+                        )}
+                        {patternOffer && (
+                          <div className="animate-fade-in bg-amber-50/70 border border-amber-200/80 rounded-lg p-1.5 space-y-1">
+                            <p className="text-[11px] text-amber-800">¿Quitar también el patrón aprendido?</p>
+                            <div className="flex gap-1">
+                              <button
+                                onClick={() => handleRemovePattern(row.matching_key, patternOffer)}
+                                className="text-[11px] px-1.5 py-0.5 rounded bg-amber-600 text-white hover:bg-amber-700"
+                              >
+                                Sí
+                              </button>
+                              <button
+                                onClick={() => setRemovePatternOffer((prev) => { const n = { ...prev }; delete n[row.matching_key]; return n; })}
+                                className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100"
+                              >
+                                No
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        {rowMessage[row.matching_key] && (
+                          <span className="text-[11px] text-green-700">{rowMessage[row.matching_key]}</span>
+                        )}
+                        {rowError[row.matching_key] && (
+                          <span className="text-[11px] text-red-600">{rowError[row.matching_key]}</span>
+                        )}
+                      </div>
+                    </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -526,15 +740,6 @@ export default function TransactionsView() {
             </div>
           </div>
         )}
-      </div>
-
-      {/* Scrollbar horizontal fijo en la parte inferior de la pantalla */}
-      <div
-        ref={fixedScrollRef}
-        className="fixed bottom-0 right-0 z-50 bg-white border-t border-black/[0.06] transition-all duration-300 ease-in-out"
-        style={{ left: sidebarWidth, overflowX: "scroll", overflowY: "hidden", height: 20 }}
-      >
-        <div style={{ width: tableWidth, height: 1 }} />
       </div>
     </div>
   );

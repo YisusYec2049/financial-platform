@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback, useRef, useLayoutEffect } from "react";
 import * as XLSX from "xlsx";
-import { useSidebar } from "@/components/SidebarContext";
 import { useSessionState } from "@/lib/useSessionState";
 import CruceExcepcionesView, { type CruceExcepcionesViewRef } from "@/components/CruceExcepcionesView";
 
@@ -140,7 +139,6 @@ type CruceRow = {
 };
 
 export default function CruceView() {
-  const { width: sidebarWidth }           = useSidebar();
   const [tab, setTab]                     = useState<"todas" | "excepciones">("todas");
   const [data, setData]                   = useState<CruceRow[]>([]);
   const [total, setTotal]                 = useState(0);
@@ -155,12 +153,10 @@ export default function CruceView() {
   const [sinCrucePreventiva, setSinCrucePreventiva] = useSessionState("cruce.sinCrucePreventiva", false);
   const [methods, setMethods]             = useState<{ label: string; value: string }[]>([]);
   const [fetchError, setFetchError]       = useState("");
-  const [tableWidth, setTableWidth]       = useState(0);
   const [dropdownOpen, setDropdownOpen]   = useState(false);
   const searchTimeout                     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef                = useRef<AbortController | null>(null);
   const tableContainerRef                 = useRef<HTMLDivElement>(null);
-  const fixedScrollRef                    = useRef<HTMLDivElement>(null);
   const excepcionesRef                    = useRef<CruceExcepcionesViewRef>(null);
   const dropdownRef                       = useRef<HTMLDivElement>(null);
 
@@ -231,35 +227,6 @@ export default function CruceView() {
     }, 400);
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
   }, [search, paymentMethod, payFrom, payTo, regFrom, regTo, sinCrucePreventiva, fetchData]);
-
-  useEffect(() => {
-    const tableEl = tableContainerRef.current;
-    const fixedEl = fixedScrollRef.current;
-    if (!tableEl || !fixedEl) return;
-
-    let ticking = false;
-    const onTable = () => { if (!ticking) { ticking = true; fixedEl.scrollLeft = tableEl.scrollLeft; ticking = false; } };
-    const onFixed = () => { if (!ticking) { ticking = true; tableEl.scrollLeft = fixedEl.scrollLeft; ticking = false; } };
-
-    tableEl.addEventListener("scroll", onTable, { passive: true });
-    fixedEl.addEventListener("scroll", onFixed, { passive: true });
-    return () => {
-      tableEl.removeEventListener("scroll", onTable);
-      fixedEl.removeEventListener("scroll", onFixed);
-    };
-  }, []);
-
-  useEffect(() => {
-    const tableEl = tableContainerRef.current;
-    if (!tableEl) return;
-    const update = () => {
-      const table = tableEl.querySelector("table");
-      if (table) setTableWidth(table.scrollWidth);
-    };
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, [data]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -500,7 +467,7 @@ export default function CruceView() {
       )}
 
       <div className={`${PANEL} animate-fade-in [animation-delay:100ms] overflow-hidden`}>
-        <div ref={tableContainerRef} className="overflow-x-auto">
+        <div ref={tableContainerRef} className="overflow-auto max-h-[65vh]">
           <table className="w-full text-sm border-collapse">
             <thead className="sticky top-0 z-10">
               <tr className="bg-gray-50 text-gray-500 text-left border-b border-black/[0.06]">
@@ -589,14 +556,6 @@ export default function CruceView() {
             </div>
           </div>
         )}
-      </div>
-
-      <div
-        ref={fixedScrollRef}
-        className="fixed bottom-0 right-0 z-50 bg-white border-t border-black/[0.06] transition-all duration-300 ease-in-out"
-        style={{ left: sidebarWidth, overflowX: "scroll", overflowY: "hidden", height: 20 }}
-      >
-        <div style={{ width: tableWidth, height: 1 }} />
       </div>
       </>
       )}
