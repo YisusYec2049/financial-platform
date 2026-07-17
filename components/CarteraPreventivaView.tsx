@@ -59,7 +59,6 @@ export default function CarteraPreventivaView() {
   const [vencFrom, setVencFrom]         = useSessionState("cartera_preventiva.vencFrom", "");
   const [vencTo, setVencTo]             = useSessionState("cartera_preventiva.vencTo", "");
   const [pagoParcial, setPagoParcial]   = useSessionState("cartera_preventiva.pagoParcial", false);
-  const [conExcedente, setConExcedente] = useSessionState("cartera_preventiva.conExcedente", false);
   const [medioPago, setMedioPago]       = useSessionState("cartera_preventiva.medioPago", "");
   const [payFrom, setPayFrom]           = useSessionState("cartera_preventiva.payFrom", "");
   const [payTo, setPayTo]               = useSessionState("cartera_preventiva.payTo", "");
@@ -70,6 +69,7 @@ export default function CarteraPreventivaView() {
   const [fetchError, setFetchError]     = useState("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [multiInscripcionDocs, setMultiInscripcionDocs] = useState<Set<string>>(new Set());
+  const [ultimaCuotaLlaves, setUltimaCuotaLlaves] = useState<Set<string>>(new Set());
   const [asociarOpen, setAsociarOpen]           = useState<Record<string, boolean>>({});
   const [asociarData, setAsociarData]           = useState<Record<string, { inscripciones: InscripcionPendiente[]; pagos: PagoAsociable[] }>>({});
   const [asociarLoading, setAsociarLoading]     = useState<Record<string, boolean>>({});
@@ -102,7 +102,6 @@ export default function CarteraPreventivaView() {
     if (vencFrom)     params.set("venc_from", vencFrom);
     if (vencTo)       params.set("venc_to", vencTo);
     if (pagoParcial)  params.set("pago_parcial", "1");
-    if (conExcedente) params.set("con_excedente", "1");
     if (medioPago)    params.set("medio_pago", medioPago);
     if (payFrom)      params.set("pay_from", payFrom);
     if (payTo)        params.set("pay_to", payTo);
@@ -123,7 +122,7 @@ export default function CarteraPreventivaView() {
     } finally {
       setLoading(false);
     }
-  }, [search, estado, vencFrom, vencTo, pagoParcial, conExcedente, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion]);
+  }, [search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion]);
 
   const fetchMedios = useCallback(async () => {
     const res  = await fetch("/api/cartera-preventiva/medios-pago");
@@ -141,10 +140,21 @@ export default function CarteraPreventivaView() {
     }
   }, []);
 
+  const fetchUltimaCuota = useCallback(async () => {
+    try {
+      const res  = await fetch("/api/cartera-preventiva/overrides");
+      const json = await res.json();
+      if (res.ok) setUltimaCuotaLlaves(new Set(json.llaves || []));
+    } catch {
+      // No bloquea la vista si falla — el botón simplemente arranca sin marcar.
+    }
+  }, []);
+
   useEffect(() => {
     fetchMedios();
     fetchMultiInscripcion();
-  }, [fetchMedios, fetchMultiInscripcion]);
+    fetchUltimaCuota();
+  }, [fetchMedios, fetchMultiInscripcion, fetchUltimaCuota]);
 
   useEffect(() => {
     if (searchTimeout.current) clearTimeout(searchTimeout.current);
@@ -153,7 +163,7 @@ export default function CarteraPreventivaView() {
       fetchData(1);
     }, 400);
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
-  }, [search, estado, vencFrom, vencTo, pagoParcial, conExcedente, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, fetchData]);
+  }, [search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, fetchData]);
 
 
   useEffect(() => {
@@ -173,7 +183,6 @@ export default function CarteraPreventivaView() {
     if (vencFrom)     params.set("venc_from", vencFrom);
     if (vencTo)       params.set("venc_to", vencTo);
     if (pagoParcial)  params.set("pago_parcial", "1");
-    if (conExcedente) params.set("con_excedente", "1");
     if (medioPago)    params.set("medio_pago", medioPago);
     if (payFrom)      params.set("pay_from", payFrom);
     if (payTo)        params.set("pay_to", payTo);
@@ -280,7 +289,35 @@ export default function CarteraPreventivaView() {
 
   const isPagoParcial = (row: CarteraPreventivaRow) => row.diferencia != null && row.diferencia < 0;
   const isSaldoFavor = (row: CarteraPreventivaRow) => row.diferencia != null && row.diferencia > 0;
-  const isExcedente = (row: CarteraPreventivaRow) => !!row.correo_elec && row.correo_elec.toUpperCase().includes("SOBRANTE");
+
+  // Spec Sobrantes-Excedentes §2: notificacion reemplaza las etiquetas viejas
+  // de Fase 8 ('1 CUOTA + ABONO' etc, que ya no se producen) por 3 valores
+  // nuevos con badge propio. Cualquier otro valor (incluidas esas etiquetas
+  // viejas, si quedara alguna fila sin reprocesar) se muestra como texto plano.
+  const notificacionBadge = (row: CarteraPreventivaRow) => {
+    if (row.notificacion === "SOBRANTE") {
+      return <span className="bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">SOBRANTE</span>;
+    }
+    if (row.notificacion === "EXCEDENTE") {
+      return <span className="bg-purple-50 text-purple-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">EXCEDENTE</span>;
+    }
+    if (row.notificacion === "CONDONADO") {
+      return (
+        <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+          <span className="bg-emerald-50 text-emerald-700 text-xs px-2 py-0.5 rounded-full">CONDONADO</span>
+          {row.diferencia != null && <span className="text-xs text-gray-500">{fmtMonto(Math.abs(row.diferencia))}</span>}
+        </span>
+      );
+    }
+    return <span className="text-gray-500 text-xs whitespace-nowrap">{fmt(row.notificacion)}</span>;
+  };
+
+  // Spec Sobrantes-Excedentes §1: la decisión humana del modelo A/B. Aparece
+  // solo cuando la decisión cambia algo (SOBRANTE→EXCEDENTE, o faltante→
+  // condonar); en una fila sin discrepancia no hace falta. Toggle reversible:
+  // marcar de nuevo lo pone en false y el pipeline revierte a modo A.
+  const necesitaUltimaCuota = (row: CarteraPreventivaRow) =>
+    row.notificacion === "SOBRANTE" || (row.diferencia != null && row.diferencia < 0);
 
   const rowTint = (row: CarteraPreventivaRow) => {
     if (!row.fecha_pago) return "";
@@ -404,6 +441,32 @@ export default function CarteraPreventivaView() {
     }
   };
 
+  const handleToggleUltimaCuota = async (row: CarteraPreventivaRow) => {
+    const nuevoValor = !ultimaCuotaLlaves.has(row.llave);
+    setRowSaving(row.llave);
+    setRowError((prev) => ({ ...prev, [row.llave]: "" }));
+    try {
+      const res  = await fetch("/api/cartera-preventiva/overrides", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ llave: row.llave, es_ultima_cuota: nuevoValor }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al guardar");
+      setUltimaCuotaLlaves((prev) => {
+        const next = new Set(prev);
+        if (nuevoValor) next.add(row.llave); else next.delete(row.llave);
+        return next;
+      });
+      setRowMessage((prev) => ({ ...prev, [row.llave]: nuevoValor ? "Marcada como última cuota. Se reflejará en el próximo cruce." : "Desmarcada. Se reflejará en el próximo cruce." }));
+      fireTrigger();
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setRowSaving(null);
+    }
+  };
+
   return (
     <div className="p-5 pb-8 space-y-4">
       <div className={`${PANEL} animate-slide-down px-6 py-4 flex items-center justify-between flex-wrap gap-3`}>
@@ -471,15 +534,6 @@ export default function CarteraPreventivaView() {
             />
             <span className="font-medium">Solo pago parcial</span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={conExcedente}
-              onChange={(e) => { setConExcedente(e.target.checked); setPage(1); }}
-              className="rounded border-gray-300 text-brand-600 focus:ring-brand-500/50"
-            />
-            <span className="font-medium">Con excedente sin cuota</span>
-          </label>
           <div className="flex items-center gap-2">
             <span className="font-medium">Día del Cruce</span>
             <input type="date" value={cruceFrom} onChange={(e) => { setCruceFrom(e.target.value); setPage(1); }}
@@ -497,9 +551,9 @@ export default function CarteraPreventivaView() {
             />
             <span className="font-medium">Con notificación de pago de más</span>
           </label>
-          {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || conExcedente || medioPago || payFrom || payTo || cruceFrom || cruceTo || conNotificacion) && (
+          {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || medioPago || payFrom || payTo || cruceFrom || cruceTo || conNotificacion) && (
             <button
-              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setConExcedente(false); setMedioPago(""); setPayFrom(""); setPayTo(""); setCruceFrom(""); setCruceTo(""); setConNotificacion(false); setPage(1); }}
+              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setMedioPago(""); setPayFrom(""); setPayTo(""); setCruceFrom(""); setCruceTo(""); setConNotificacion(false); setPage(1); }}
               className="text-red-500 hover:text-red-700 text-xs underline"
             >
               Limpiar filtros
@@ -599,7 +653,6 @@ export default function CarteraPreventivaView() {
                 data.map((row) => {
                   const parcial = isPagoParcial(row);
                   const saldoFavor = isSaldoFavor(row);
-                  const excedente = isExcedente(row);
                   const pendiente = !row.fecha_pago;
                   const saving = rowSaving === row.llave;
                   const cuotaValue = cuotaEdits[row.llave] ?? String(row.valor_cuota);
@@ -642,13 +695,10 @@ export default function CarteraPreventivaView() {
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.valor_pago)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.codigo_transaccion_1)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.codigo_transaccion_2)}</td>
-                    <td className={`px-4 py-2.5 text-xs ${excedente ? "bg-indigo-50/60" : ""}`}>
-                      <div className="flex items-center gap-1">
-                        {excedente && <span title="Excedente sin cuota registrada" className="text-indigo-600">⚠️</span>}
-                        <span className="text-gray-500">{fmt(row.correo_elec)}</span>
-                      </div>
+                    <td className="px-4 py-2.5 text-xs">
+                      <span className="text-gray-500">{fmt(row.correo_elec)}</span>
                     </td>
-                    <td className="px-4 py-2.5 text-gray-500 text-xs whitespace-nowrap">{fmt(row.notificacion)}</td>
+                    <td className="px-4 py-2.5 text-xs whitespace-nowrap">{notificacionBadge(row)}</td>
                     <td className={`px-4 py-2.5 text-gray-700 whitespace-nowrap ${parcial ? "bg-orange-50/60" : saldoFavor ? "bg-teal-50/60" : ""}`}>
                       <div className="flex items-center gap-1">
                         {parcial && <span title="Pago parcial: queda saldo pendiente" className="text-orange-600 text-xs">⚠️</span>}
@@ -660,6 +710,20 @@ export default function CarteraPreventivaView() {
                     <td className="px-4 py-2.5">{paymentBadge(row)}</td>
                     <td className="px-4 py-2.5">
                       <div className="flex flex-col gap-1 min-w-[160px]">
+                        {necesitaUltimaCuota(row) && (
+                          <button
+                            onClick={() => handleToggleUltimaCuota(row)}
+                            disabled={saving}
+                            title="Marca que esta es la última cuota de la inscripción (modo B): un sobrante pasa a excedente final, un faltante se condona hasta $50k"
+                            className={`text-xs px-2 py-1 rounded-lg border active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 ${
+                              ultimaCuotaLlaves.has(row.llave)
+                                ? "bg-indigo-600 border-indigo-600 text-white hover:bg-indigo-700"
+                                : "border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                            }`}
+                          >
+                            {ultimaCuotaLlaves.has(row.llave) ? "✓ Última cuota" : "Es la última cuota"}
+                          </button>
+                        )}
                         {pendiente && (
                           <button
                             onClick={() => toggleCierrePanel(row)}
@@ -764,7 +828,7 @@ export default function CarteraPreventivaView() {
                         )}
                         {rowMessage[row.llave] && <span className="text-[11px] text-green-700">{rowMessage[row.llave]}</span>}
                         {rowError[row.llave] && <span className="text-[11px] text-red-600">{rowError[row.llave]}</span>}
-                        {!pendiente && !cierreOpen[row.llave] && !rowMessage[row.llave] && (
+                        {!pendiente && !necesitaUltimaCuota(row) && !cierreOpen[row.llave] && !rowMessage[row.llave] && (
                           <span className="text-xs text-gray-400">—</span>
                         )}
                       </div>
