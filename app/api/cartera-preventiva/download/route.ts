@@ -46,7 +46,10 @@ export async function GET(req: NextRequest) {
     if (vencTo)   query = query.lte("fecha_vencimiento", vencTo);
 
     if (pagoParcial)  query = query.lt("diferencia", 0);
-    if (medioPago)    query = query.eq("medio_pago", medioPago);
+    if (medioPago) {
+      if (medioPago.endsWith("%")) query = query.ilike("medio_pago", medioPago);
+      else query = query.eq("medio_pago", medioPago);
+    }
     if (payFrom)      query = query.gte("fecha_pago", payFrom);
     if (payTo)        query = query.lte("fecha_pago", payTo);
     if (cruceFrom)    query = query.gte("fecha_cruce", cruceFrom);

@@ -92,7 +92,7 @@ export default function CarteraPreventivaView() {
   const [cruceFrom, setCruceFrom]       = useSessionState("cartera_preventiva.cruceFrom", "");
   const [cruceTo, setCruceTo]           = useSessionState("cartera_preventiva.cruceTo", "");
   const [conNotificacion, setConNotificacion] = useSessionState("cartera_preventiva.conNotificacion", false);
-  const [medios, setMedios]             = useState<string[]>([]);
+  const [medios, setMedios]             = useState<{ label: string; value: string }[]>([]);
   const [fetchError, setFetchError]     = useState("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [multiInscripcionDocs, setMultiInscripcionDocs] = useState<Set<string>>(new Set());
@@ -165,7 +165,23 @@ export default function CarteraPreventivaView() {
   const fetchMedios = useCallback(async () => {
     const res  = await fetch("/api/cartera-preventiva/medios-pago");
     const raw: string[] = await res.json();
-    setMedios(raw);
+
+    // Agrupar WOMPI y Placetopay en una sola opción (Filtro 1, spec Wompi-Placetopay)
+    const grouped: { label: string; value: string }[] = [];
+    let addedWompi      = false;
+    let addedPlacetopay = false;
+
+    for (const m of raw) {
+      if (m.toUpperCase().startsWith("WOMPI")) {
+        if (!addedWompi) { grouped.push({ label: "Wompi", value: "WOMPI%" }); addedWompi = true; }
+      } else if (m.toLowerCase().startsWith("placetopay")) {
+        if (!addedPlacetopay) { grouped.push({ label: "Placetopay", value: "PLACETOPAY%" }); addedPlacetopay = true; }
+      } else {
+        grouped.push({ label: m, value: m });
+      }
+    }
+
+    setMedios(grouped);
   }, []);
 
   const fetchMultiInscripcion = useCallback(async () => {
@@ -731,7 +747,7 @@ export default function CarteraPreventivaView() {
           >
             <option value="" className="text-gray-900">Todos los medios de pago</option>
             {medios.map((m) => (
-              <option key={m} value={m} className="text-gray-900">{m}</option>
+              <option key={m.value} value={m.value} className="text-gray-900">{m.label}</option>
             ))}
           </select>
         </div>

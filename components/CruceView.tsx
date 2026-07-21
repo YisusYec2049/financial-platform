@@ -151,6 +151,7 @@ export default function CruceView() {
   const [regFrom, setRegFrom]             = useSessionState("cruce.regFrom", "");
   const [regTo, setRegTo]                 = useSessionState("cruce.regTo", "");
   const [sinCrucePreventiva, setSinCrucePreventiva] = useSessionState("cruce.sinCrucePreventiva", false);
+  const [wompiTipo, setWompiTipo]         = useSessionState("cruce.wompiTipo", "");
   const [methods, setMethods]             = useState<{ label: string; value: string }[]>([]);
   const [fetchError, setFetchError]       = useState("");
   const [dropdownOpen, setDropdownOpen]   = useState(false);
@@ -199,6 +200,7 @@ export default function CruceView() {
     if (regFrom)        params.set("reg_from", regFrom);
     if (regTo)          params.set("reg_to", regTo);
     if (sinCrucePreventiva) params.set("sin_cruce_preventiva", "1");
+    if (paymentMethod === "WOMPI%" && wompiTipo) params.set("wompi_tipo", wompiTipo);
     params.set("page", String(currentPage));
 
     try {
@@ -213,7 +215,7 @@ export default function CruceView() {
     } finally {
       setLoading(false);
     }
-  }, [search, paymentMethod, payFrom, payTo, regFrom, regTo, sinCrucePreventiva]);
+  }, [search, paymentMethod, payFrom, payTo, regFrom, regTo, sinCrucePreventiva, wompiTipo]);
 
   useEffect(() => {
     fetchMethods();
@@ -226,7 +228,7 @@ export default function CruceView() {
       fetchData(1);
     }, 400);
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
-  }, [search, paymentMethod, payFrom, payTo, regFrom, regTo, sinCrucePreventiva, fetchData]);
+  }, [search, paymentMethod, payFrom, payTo, regFrom, regTo, sinCrucePreventiva, wompiTipo, fetchData]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -247,6 +249,7 @@ export default function CruceView() {
     if (regFrom)        params.set("reg_from", regFrom);
     if (regTo)          params.set("reg_to", regTo);
     if (sinCrucePreventiva) params.set("sin_cruce_preventiva", "1");
+    if (paymentMethod === "WOMPI%" && wompiTipo) params.set("wompi_tipo", wompiTipo);
     return params;
   };
 
@@ -375,13 +378,27 @@ export default function CruceView() {
           </div>
           <select
             value={paymentMethod}
-            onChange={(e) => { setPaymentMethod(e.target.value); setPage(1); }}
+            onChange={(e) => {
+              setPaymentMethod(e.target.value);
+              if (e.target.value !== "WOMPI%") setWompiTipo("");
+              setPage(1);
+            }}
             className={INPUT}
           >
             <option value="" className="text-gray-900">Todos los bancos</option>
             {methods.map((m) => (
               <option key={m.value} value={m.value} className="text-gray-900">{m.label}</option>
             ))}
+          </select>
+          <select
+            value={wompiTipo}
+            onChange={(e) => { setWompiTipo(e.target.value); setPage(1); }}
+            disabled={paymentMethod !== "WOMPI%"}
+            className={`${INPUT} disabled:opacity-40 disabled:cursor-not-allowed`}
+          >
+            <option value="" className="text-gray-900">Todos (Wompi)</option>
+            <option value="automatico" className="text-gray-900">Automáticos</option>
+            <option value="manual" className="text-gray-900">Manuales</option>
           </select>
         </div>
 
@@ -411,9 +428,9 @@ export default function CruceView() {
             />
             <span className="font-medium">Sin cruce con Cartera Preventiva</span>
           </label>
-          {(search || paymentMethod || payFrom || payTo || regFrom || regTo || sinCrucePreventiva) && (
+          {(search || paymentMethod || payFrom || payTo || regFrom || regTo || sinCrucePreventiva || wompiTipo) && (
             <button
-              onClick={() => { setSearch(""); setPaymentMethod(""); setPayFrom(""); setPayTo(""); setRegFrom(""); setRegTo(""); setSinCrucePreventiva(false); setPage(1); }}
+              onClick={() => { setSearch(""); setPaymentMethod(""); setPayFrom(""); setPayTo(""); setRegFrom(""); setRegTo(""); setSinCrucePreventiva(false); setWompiTipo(""); setPage(1); }}
               className="text-red-500 hover:text-red-700 text-xs underline"
             >
               Limpiar filtros

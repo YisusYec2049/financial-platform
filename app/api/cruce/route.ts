@@ -15,6 +15,7 @@ export async function GET(req: NextRequest) {
   const regFrom       = searchParams.get("reg_from") || "";
   const regTo         = searchParams.get("reg_to") || "";
   const sinCrucePreventiva = searchParams.get("sin_cruce_preventiva") === "1";
+  const wompiTipo     = searchParams.get("wompi_tipo") || "";
   const page          = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const pageSize      = 100;
   const offset        = (page - 1) * pageSize;
@@ -52,6 +53,13 @@ export async function GET(req: NextRequest) {
       .or("cruce.is.null,cruce.eq.");
   }
 
+  // Filtro 2 (spec Wompi-Placetopay): solo se envía cuando el Filtro 1 = "Wompi"
+  if (wompiTipo === "automatico") {
+    query = query.not("metodo_de_pago", "is", null).neq("metodo_de_pago", "PAGOS MANUALES");
+  } else if (wompiTipo === "manual") {
+    query = query.eq("metodo_de_pago", "PAGOS MANUALES");
+  }
+
   query = query
     .order("payment_date", { ascending: false })
     .range(offset, offset + pageSize - 1);
@@ -63,7 +71,7 @@ export async function GET(req: NextRequest) {
   logAudit({
     user_email: user.email ?? "unknown",
     action: "query",
-    filters: { search, paymentMethod, payFrom, payTo, regFrom, regTo, sinCrucePreventiva, page, view: "cruce" },
+    filters: { search, paymentMethod, payFrom, payTo, regFrom, regTo, sinCrucePreventiva, wompiTipo, page, view: "cruce" },
     result_count: count ?? 0,
   });
 

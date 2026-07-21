@@ -15,6 +15,7 @@ export async function GET(req: NextRequest) {
   const regFrom       = searchParams.get("reg_from") || "";
   const regTo         = searchParams.get("reg_to") || "";
   const sinCrucePreventiva = searchParams.get("sin_cruce_preventiva") === "1";
+  const wompiTipo     = searchParams.get("wompi_tipo") || "";
 
   const supabase = createAdminClient();
   const MAX_ROWS = 50_000;
@@ -56,6 +57,12 @@ export async function GET(req: NextRequest) {
         .or("cruce.is.null,cruce.eq.");
     }
 
+    if (wompiTipo === "automatico") {
+      query = query.not("metodo_de_pago", "is", null).neq("metodo_de_pago", "PAGOS MANUALES");
+    } else if (wompiTipo === "manual") {
+      query = query.eq("metodo_de_pago", "PAGOS MANUALES");
+    }
+
     const { data, error } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     if (!data || data.length === 0) break;
@@ -78,7 +85,7 @@ export async function GET(req: NextRequest) {
   await logAudit({
     user_email: user.email ?? "unknown",
     action: "download",
-    filters: { search, paymentMethod, payFrom, payTo, regFrom, regTo, sinCrucePreventiva, view: "cruce" },
+    filters: { search, paymentMethod, payFrom, payTo, regFrom, regTo, sinCrucePreventiva, wompiTipo, view: "cruce" },
     result_count: deduped.length,
   });
 

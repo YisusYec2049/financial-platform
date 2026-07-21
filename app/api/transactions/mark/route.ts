@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
       matching_key: matchingKey,
       tipo,
       origen: "manual",
-      es_pago_unico: tipo === "matricula" ? esPagoUnico : null,
+      es_pago_unico: tipo === "matricula" ? esPagoUnico : false,
       fecha_marcada: today,
       fecha_ingreso: tx.registration_date,
       val: null,
