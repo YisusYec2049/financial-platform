@@ -87,6 +87,7 @@ export default function CarteraPreventivaView() {
   const [vencTo, setVencTo]             = useSessionState("cartera_preventiva.vencTo", "");
   const [pagoParcial, setPagoParcial]   = useSessionState("cartera_preventiva.pagoParcial", false);
   const [medioPago, setMedioPago]       = useSessionState("cartera_preventiva.medioPago", "");
+  const [wompiTipo, setWompiTipo]       = useSessionState("cartera_preventiva.wompiTipo", "");
   const [payFrom, setPayFrom]           = useSessionState("cartera_preventiva.payFrom", "");
   const [payTo, setPayTo]               = useSessionState("cartera_preventiva.payTo", "");
   const [cruceFrom, setCruceFrom]       = useSessionState("cartera_preventiva.cruceFrom", "");
@@ -146,6 +147,7 @@ export default function CarteraPreventivaView() {
     if (cruceFrom)    params.set("cruce_from", cruceFrom);
     if (cruceTo)      params.set("cruce_to", cruceTo);
     if (conNotificacion) params.set("con_notificacion", "1");
+    if (medioPago === "WOMPI%" && wompiTipo) params.set("wompi_tipo", wompiTipo);
     params.set("page", String(currentPage));
 
     try {
@@ -160,7 +162,7 @@ export default function CarteraPreventivaView() {
     } finally {
       setLoading(false);
     }
-  }, [search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion]);
+  }, [search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, wompiTipo]);
 
   const fetchMedios = useCallback(async () => {
     const res  = await fetch("/api/cartera-preventiva/medios-pago");
@@ -256,7 +258,7 @@ export default function CarteraPreventivaView() {
       fetchData(1);
     }, 400);
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
-  }, [search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, fetchData]);
+  }, [search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, wompiTipo, fetchData]);
 
 
   useEffect(() => {
@@ -282,6 +284,7 @@ export default function CarteraPreventivaView() {
     if (cruceFrom)    params.set("cruce_from", cruceFrom);
     if (cruceTo)      params.set("cruce_to", cruceTo);
     if (conNotificacion) params.set("con_notificacion", "1");
+    if (medioPago === "WOMPI%" && wompiTipo) params.set("wompi_tipo", wompiTipo);
     return params;
   };
 
@@ -742,13 +745,27 @@ export default function CarteraPreventivaView() {
           </select>
           <select
             value={medioPago}
-            onChange={(e) => { setMedioPago(e.target.value); setPage(1); }}
+            onChange={(e) => {
+              setMedioPago(e.target.value);
+              if (e.target.value !== "WOMPI%") setWompiTipo("");
+              setPage(1);
+            }}
             className={INPUT}
           >
             <option value="" className="text-gray-900">Todos los medios de pago</option>
             {medios.map((m) => (
               <option key={m.value} value={m.value} className="text-gray-900">{m.label}</option>
             ))}
+          </select>
+          <select
+            value={wompiTipo}
+            onChange={(e) => { setWompiTipo(e.target.value); setPage(1); }}
+            disabled={medioPago !== "WOMPI%"}
+            className={`${INPUT} disabled:opacity-40 disabled:cursor-not-allowed`}
+          >
+            <option value="" className="text-gray-900">Todos (Wompi)</option>
+            <option value="automatico" className="text-gray-900">Automáticos</option>
+            <option value="manual" className="text-gray-900">Manuales</option>
           </select>
         </div>
 
@@ -795,9 +812,9 @@ export default function CarteraPreventivaView() {
             />
             <span className="font-medium">Con notificación de pago de más</span>
           </label>
-          {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || medioPago || payFrom || payTo || cruceFrom || cruceTo || conNotificacion) && (
+          {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || medioPago || payFrom || payTo || cruceFrom || cruceTo || conNotificacion || wompiTipo) && (
             <button
-              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setMedioPago(""); setPayFrom(""); setPayTo(""); setCruceFrom(""); setCruceTo(""); setConNotificacion(false); setPage(1); }}
+              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setMedioPago(""); setPayFrom(""); setPayTo(""); setCruceFrom(""); setCruceTo(""); setConNotificacion(false); setWompiTipo(""); setPage(1); }}
               className="text-red-500 hover:text-red-700 text-xs underline"
             >
               Limpiar filtros

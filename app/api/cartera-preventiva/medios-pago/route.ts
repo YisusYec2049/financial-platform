@@ -7,13 +7,30 @@ export async function GET(req: NextRequest) {
   if (response) return response;
 
   const supabase = createAdminClient();
-  const { data, error } = await supabase
-    .from("cartera_preventiva")
-    .select("medio_pago")
-    .limit(100000);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  // PostgREST cabecea las filas devueltas (max-rows) sin importar el .limit()
+  // pedido, así que un solo select traía siempre las primeras ~1000 filas por
+  // orden de inserción — como esas primeras filas son mayormente pendientes
+  // (medio_pago null), el dropdown salía vacío. Se pagina hasta agotar la tabla.
+  const BATCH = 1000;
+  const values = new Set<string>();
+  let from = 0;
+  for (;;) {
+    const { data, error } = await supabase
+      .from("cartera_preventiva")
+      .select("medio_pago")
+      .range(from, from + BATCH - 1);
 
-  const unique = [...new Set(data.map((r: { medio_pago: string | null }) => r.medio_pago).filter(Boolean))].sort();
-  return NextResponse.json(unique);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (!data || data.length === 0) break;
+
+    for (const row of data as { medio_pago: string | null }[]) {
+      if (row.medio_pago) values.add(row.medio_pago);
+    }
+
+    if (data.length < BATCH) break;
+    from += BATCH;
+  }
+
+  return NextResponse.json([...values].sort());
 }

@@ -19,6 +19,7 @@ export async function GET(req: NextRequest) {
   const cruceFrom    = searchParams.get("cruce_from") || "";
   const cruceTo      = searchParams.get("cruce_to") || "";
   const conNotificacion = searchParams.get("con_notificacion") === "1";
+  const wompiTipo    = searchParams.get("wompi_tipo") || "";
   const page          = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const pageSize      = 100;
   const offset        = (page - 1) * pageSize;
@@ -49,6 +50,10 @@ export async function GET(req: NextRequest) {
   if (cruceTo)      query = query.lte("fecha_cruce", cruceTo);
   if (conNotificacion) query = query.not("notificacion", "is", null).neq("notificacion", "");
 
+  // Filtro 2 (spec Wompi-Placetopay): solo se envía cuando el Filtro 1 = "Wompi"
+  if (wompiTipo === "automatico") query = query.eq("es_wompi_automatico", true);
+  else if (wompiTipo === "manual") query = query.eq("es_wompi_automatico", false);
+
   // Regla #5 (Spec Auto Cartera): una cuota "FALTA DE PAGO" hereda inscrip y
   // fecha_vencimiento de la cuota de la que se partió, así que ordenar por
   // (inscrip, fecha_vencimiento) la deja justo debajo de su padre por defecto.
@@ -64,7 +69,7 @@ export async function GET(req: NextRequest) {
   logAudit({
     user_email: user.email ?? "unknown",
     action: "query",
-    filters: { search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, page, view: "cartera_preventiva" },
+    filters: { search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, wompiTipo, page, view: "cartera_preventiva" },
     result_count: count ?? 0,
   });
 

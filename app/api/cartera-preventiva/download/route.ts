@@ -19,6 +19,7 @@ export async function GET(req: NextRequest) {
   const cruceFrom    = searchParams.get("cruce_from") || "";
   const cruceTo      = searchParams.get("cruce_to") || "";
   const conNotificacion = searchParams.get("con_notificacion") === "1";
+  const wompiTipo    = searchParams.get("wompi_tipo") || "";
 
   const supabase = createAdminClient();
   const MAX_ROWS = 50_000;
@@ -56,6 +57,9 @@ export async function GET(req: NextRequest) {
     if (cruceTo)      query = query.lte("fecha_cruce", cruceTo);
     if (conNotificacion) query = query.not("notificacion", "is", null).neq("notificacion", "");
 
+    if (wompiTipo === "automatico") query = query.eq("es_wompi_automatico", true);
+    else if (wompiTipo === "manual") query = query.eq("es_wompi_automatico", false);
+
     const { data, error } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     if (!data || data.length === 0) break;
@@ -78,7 +82,7 @@ export async function GET(req: NextRequest) {
   await logAudit({
     user_email: user.email ?? "unknown",
     action: "download",
-    filters: { search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, view: "cartera_preventiva" },
+    filters: { search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, wompiTipo, view: "cartera_preventiva" },
     result_count: deduped.length,
   });
 
