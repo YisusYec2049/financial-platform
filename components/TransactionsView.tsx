@@ -30,6 +30,7 @@ const CATEGORIA_LABEL: Record<string, string> = {
   cesantias: "Cesantías",
   pago_llave: "Pago por llave",
   cheque: "Cheque",
+  otros: "Otros",
 };
 
 const CATEGORIA_BADGE: Record<string, string> = {
@@ -38,6 +39,7 @@ const CATEGORIA_BADGE: Record<string, string> = {
   cesantias: "bg-emerald-50 text-emerald-700",
   pago_llave: "bg-amber-50 text-amber-700",
   cheque: "bg-rose-50 text-rose-700",
+  otros: "bg-slate-100 text-slate-700",
 };
 
 const PAGO_UNICO_THRESHOLD = 2_000_000;
@@ -65,6 +67,8 @@ export default function TransactionsView() {
   const [rowMessage, setRowMessage]       = useState<Record<string, string>>({});
   const [rowError, setRowError]           = useState<Record<string, string>>({});
   const [removePatternOffer, setRemovePatternOffer] = useState<Record<string, string>>({});
+  const [otrosPanelOpen, setOtrosPanelOpen]     = useState<Record<string, boolean>>({});
+  const [otrosNota, setOtrosNota]               = useState<Record<string, string>>({});
   const dropdownRef                       = useRef<HTMLDivElement>(null);
   const searchTimeout                     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef                = useRef<AbortController | null>(null);
@@ -278,7 +282,12 @@ export default function TransactionsView() {
     fetch("/api/cruce/trigger", { method: "POST" }).catch(() => null);
   };
 
-  const handleMarcar = async (row: Transaction, tipo: "matricula" | "cesantias") => {
+  const handleMarcar = async (row: Transaction, tipo: "matricula" | "cesantias" | "otros") => {
+    const nota = tipo === "otros" ? (otrosNota[row.matching_key] ?? "").trim() : undefined;
+    if (tipo === "otros" && !nota) {
+      setRowError((prev) => ({ ...prev, [row.matching_key]: "El motivo es requerido" }));
+      return;
+    }
     setRowSaving(row.matching_key);
     setRowError((prev) => ({ ...prev, [row.matching_key]: "" }));
     setRowMessage((prev) => ({ ...prev, [row.matching_key]: "" }));
@@ -290,12 +299,14 @@ export default function TransactionsView() {
           matching_key: row.matching_key,
           tipo,
           es_pago_unico: tipo === "matricula" ? !!pagoUnicoChecked[row.matching_key] : undefined,
+          nota,
         }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al marcar");
       setData((prev) => prev.map((r) => r.matching_key === row.matching_key ? { ...r, categoria: tipo } : r));
       setRowMessage((prev) => ({ ...prev, [row.matching_key]: "Marcado. Sale del proceso en el próximo cruce." }));
+      setOtrosPanelOpen((prev) => ({ ...prev, [row.matching_key]: false }));
       fireTrigger();
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
@@ -486,6 +497,7 @@ export default function TransactionsView() {
             <option value="cesantias" className="text-gray-900">Cesantías</option>
             <option value="pago_llave" className="text-gray-900">Pago por llave</option>
             <option value="cheque" className="text-gray-900">Cheque</option>
+            <option value="otros" className="text-gray-900">Otros</option>
           </select>
         </div>
 
@@ -668,8 +680,35 @@ export default function TransactionsView() {
                             >
                               Cesantías
                             </button>
+                            <button
+                              onClick={() => setOtrosPanelOpen((prev) => ({ ...prev, [row.matching_key]: !prev[row.matching_key] }))}
+                              disabled={saving}
+                              className="text-xs px-2 py-1 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                            >
+                              Otros
+                            </button>
+                            {otrosPanelOpen[row.matching_key] && (
+                              <div className="animate-fade-in bg-slate-50 border border-slate-200 rounded-lg p-2 space-y-1.5 w-56">
+                                <label className="block text-[11px] text-gray-500">Motivo</label>
+                                <input
+                                  type="text"
+                                  value={otrosNota[row.matching_key] ?? ""}
+                                  onChange={(e) => setOtrosNota((prev) => ({ ...prev, [row.matching_key]: e.target.value }))}
+                                  disabled={saving}
+                                  placeholder="¿Por qué se aparta?"
+                                  className="w-full border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500/50"
+                                />
+                                <button
+                                  onClick={() => handleMarcar(row, "otros")}
+                                  disabled={saving}
+                                  className="w-full text-xs px-2 py-1.5 rounded-lg bg-slate-700 text-white hover:bg-slate-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                                >
+                                  {saving ? "Guardando..." : "Confirmar"}
+                                </button>
+                              </div>
+                            )}
                           </>
-                        ) : (row.categoria === "matricula" || row.categoria === "cesantias") ? (
+                        ) : (row.categoria === "matricula" || row.categoria === "cesantias" || row.categoria === "otros") ? (
                           <button
                             onClick={() => handleDesmarcar(row)}
                             disabled={saving}

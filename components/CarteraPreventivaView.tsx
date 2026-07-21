@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { useSessionState } from "@/lib/useSessionState";
 
@@ -49,6 +49,33 @@ type InscripcionPendiente = {
   fecha_vencimiento: string;
 };
 
+// Regla #4/#7 (Spec Auto Cartera): ledger de saldos a favor no auto-aplicados
+// (sobrantes y descartes), agrupables por documento+correo.
+type SaldoFavorRow = {
+  id: number;
+  documento: string | null;
+  correo: string | null;
+  cliente: string | null;
+  inscrip: string | null;
+  llave_origen: string | null;
+  matching_key: string;
+  monto: number;
+  disponible: number;
+  fecha: string | null;
+  origen: string | null;
+};
+
+// Regla #3: asociación pago↔cuota ya aplicada, candidata a descartar.
+type AsociacionRow = {
+  id: number;
+  matching_key: string;
+  monto: number;
+  origen: string;
+  created_at: string;
+  transaction_code_1: string | null;
+  payment_date: string | null;
+};
+
 export default function CarteraPreventivaView() {
   const [data, setData]                 = useState<CarteraPreventivaRow[]>([]);
   const [total, setTotal]               = useState(0);
@@ -82,6 +109,17 @@ export default function CarteraPreventivaView() {
   const [rowSaving, setRowSaving]               = useState<string | null>(null);
   const [rowMessage, setRowMessage]             = useState<Record<string, string>>({});
   const [rowError, setRowError]                 = useState<Record<string, string>>({});
+  const [saldosFavor, setSaldosFavor]           = useState<SaldoFavorRow[]>([]);
+  const [asociarSaldoOpen, setAsociarSaldoOpen] = useState<Record<string, boolean>>({});
+  const [saldoOtroValor, setSaldoOtroValor]     = useState<Record<string, string>>({});
+  const [descartarOpen, setDescartarOpen]       = useState<Record<string, boolean>>({});
+  const [descartarData, setDescartarData]       = useState<Record<string, AsociacionRow[]>>({});
+  const [descartarLoading, setDescartarLoading] = useState<Record<string, boolean>>({});
+  const [descartarError, setDescartarError]     = useState<Record<string, string>>({});
+  const [stagingCount, setStagingCount]         = useState(0);
+  const [activando, setActivando]               = useState(false);
+  const [activarMessage, setActivarMessage]     = useState("");
+  const [activarError, setActivarError]         = useState("");
   const searchTimeout                   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef              = useRef<AbortController | null>(null);
   const tableContainerRef               = useRef<HTMLDivElement>(null);
@@ -150,11 +188,50 @@ export default function CarteraPreventivaView() {
     }
   }, []);
 
+  const fetchSaldosFavor = useCallback(async () => {
+    try {
+      const res  = await fetch("/api/cartera-preventiva/saldos-favor");
+      const json = await res.json();
+      if (res.ok) setSaldosFavor(json.data || []);
+    } catch {
+      // No bloquea la vista si falla — el mensaje de saldo simplemente no aparecerá.
+    }
+  }, []);
+
+  const fetchStagingStatus = useCallback(async () => {
+    try {
+      const res  = await fetch("/api/cartera-preventiva/staging-status");
+      const json = await res.json();
+      if (res.ok) setStagingCount(json.count || 0);
+    } catch {
+      // No bloquea la vista si falla — el banner simplemente no aparece.
+    }
+  }, []);
+
   useEffect(() => {
     fetchMedios();
     fetchMultiInscripcion();
     fetchUltimaCuota();
-  }, [fetchMedios, fetchMultiInscripcion, fetchUltimaCuota]);
+    fetchSaldosFavor();
+    fetchStagingStatus();
+  }, [fetchMedios, fetchMultiInscripcion, fetchUltimaCuota, fetchSaldosFavor, fetchStagingStatus]);
+
+  // Regla #4/#7: saldos disponibles agrupados por documento+correo (misma
+  // pareja que identifica al "cliente" en cartera_saldos_favor). Rows con
+  // documento/correo null (ledger viejo, previo a esta spec) no agrupan con
+  // nada — no rompen, simplemente no ofrecen el flujo de asociar.
+  const saldoPorGrupo = useMemo(() => {
+    const map = new Map<string, { total: number; rows: SaldoFavorRow[] }>();
+    for (const s of saldosFavor) {
+      if (!s.documento || !s.correo) continue;
+      const key = `${s.documento}|${s.correo}`;
+      if (!map.has(key)) map.set(key, { total: 0, rows: [] });
+      const entry = map.get(key)!;
+      entry.total += Number(s.disponible);
+      entry.rows.push(s);
+    }
+    return map;
+  }, [saldosFavor]);
 
   useEffect(() => {
     if (searchTimeout.current) clearTimeout(searchTimeout.current);
@@ -309,6 +386,16 @@ export default function CarteraPreventivaView() {
         </span>
       );
     }
+    // Regla #5 (Spec Auto Cartera): cuota nueva generada cuando un pago dejó
+    // un faltante >= $50k tras cerrar lo que sí alcanzó a cubrir.
+    if (row.notificacion === "FALTA DE PAGO") {
+      return <span className="bg-red-50 text-red-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">FALTA DE PAGO</span>;
+    }
+    // Regla #8: cierre manual ya aplicado por el pipeline (valor_pago =
+    // valor_a_cobrar, medio_pago = 'Cartera').
+    if (row.notificacion === "CARTERA") {
+      return <span className="bg-slate-100 text-slate-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">CARTERA</span>;
+    }
     return <span className="text-gray-500 text-xs whitespace-nowrap">{fmt(row.notificacion)}</span>;
   };
 
@@ -419,6 +506,29 @@ export default function CarteraPreventivaView() {
     }
   };
 
+  // Regla #8 (Spec Auto Cartera): reabrir una cuota cerrada a mano — limpia
+  // el override (cerrado_manual=false, fecha_pago_manual=null) para que el
+  // pipeline la vuelva a poner pendiente en su próxima corrida.
+  const handleReabrirCartera = async (row: CarteraPreventivaRow) => {
+    setRowSaving(row.llave);
+    setRowError((prev) => ({ ...prev, [row.llave]: "" }));
+    try {
+      const res  = await fetch("/api/cartera-preventiva/overrides", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ llave: row.llave, cerrado_manual: false, fecha_pago_manual: null }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al reabrir");
+      setRowMessage((prev) => ({ ...prev, [row.llave]: "Reapertura guardada. Se reflejará en el próximo cruce." }));
+      fireTrigger();
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setRowSaving(null);
+    }
+  };
+
   const handleSaveValorCuota = async (row: CarteraPreventivaRow) => {
     const nuevo = Number(cuotaEdits[row.llave]);
     if (!Number.isFinite(nuevo) || nuevo === row.valor_cuota) return;
@@ -467,11 +577,129 @@ export default function CarteraPreventivaView() {
     }
   };
 
+  // Regla #7: asocia un saldo a favor puntual (una fila del ledger) a la
+  // cuota destino. El cierre lo escribe el pipeline en su próxima corrida —
+  // acá solo se decrementa el disponible local para feedback inmediato.
+  const handleAsociarSaldo = async (row: CarteraPreventivaRow, saldo: SaldoFavorRow, monto: number) => {
+    const actionKey = `saldo:${saldo.id}:${row.llave}`;
+    setRowSaving(actionKey);
+    setRowError((prev) => ({ ...prev, [row.llave]: "" }));
+    try {
+      const res  = await fetch("/api/cartera-preventiva/asociar-saldo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ saldo_id: saldo.id, llave: row.llave, monto }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al asociar el saldo");
+      setSaldosFavor((prev) => prev
+        .map((s) => s.id === saldo.id ? { ...s, disponible: s.disponible - monto } : s)
+        .filter((s) => s.disponible > 0.01));
+      setRowMessage((prev) => ({ ...prev, [row.llave]: "Saldo asociado. Se aplicará en el próximo cruce." }));
+      fireTrigger();
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setRowSaving(null);
+    }
+  };
+
+  // Regla #3: trae los pagos asociados a esta cuota para poder descartar uno.
+  const toggleDescartarPanel = async (row: CarteraPreventivaRow) => {
+    const willOpen = !descartarOpen[row.llave];
+    setDescartarOpen((prev) => ({ ...prev, [row.llave]: willOpen }));
+    if (willOpen && !descartarData[row.llave]) {
+      setDescartarLoading((prev) => ({ ...prev, [row.llave]: true }));
+      setDescartarError((prev) => ({ ...prev, [row.llave]: "" }));
+      try {
+        const res  = await fetch(`/api/cartera-preventiva/asociaciones?llave=${encodeURIComponent(row.llave)}`);
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Error al cargar pagos asociados");
+        setDescartarData((prev) => ({ ...prev, [row.llave]: json.data || [] }));
+      } catch (err) {
+        setDescartarError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
+      } finally {
+        setDescartarLoading((prev) => ({ ...prev, [row.llave]: false }));
+      }
+    }
+  };
+
+  const handleDescartarPago = async (row: CarteraPreventivaRow, asociacion: AsociacionRow) => {
+    setRowSaving(`descarte:${asociacion.id}`);
+    setDescartarError((prev) => ({ ...prev, [row.llave]: "" }));
+    try {
+      const res  = await fetch("/api/cartera-preventiva/descartar-pago", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          asociacion_id: asociacion.id,
+          llave: row.llave,
+          matching_key: asociacion.matching_key,
+          documento: row.cruce_access,
+          correo: row.correo,
+          cliente: row.cliente,
+          inscrip: row.inscrip,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al descartar el pago");
+      setDescartarData((prev) => ({ ...prev, [row.llave]: (prev[row.llave] || []).filter((a) => a.id !== asociacion.id) }));
+      setRowMessage((prev) => ({ ...prev, [row.llave]: "Pago descartado. La cuota vuelve a pendiente en el próximo cruce." }));
+      fetchSaldosFavor();
+      fireTrigger();
+    } catch (err) {
+      setDescartarError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setRowSaving(null);
+    }
+  };
+
+  // Regla #6: irreversible desde la UI — las verificaciones se hacen antes de
+  // apretar, tal como advierte el spec.
+  const handleActivarCartera = async () => {
+    if (!confirm(`¿Activar la cartera nueva (${stagingCount.toLocaleString("es-CO")} cuotas)? La versión activa actual se archivará. Esta acción es irreversible desde esta pantalla.`)) return;
+    setActivando(true);
+    setActivarError("");
+    setActivarMessage("");
+    try {
+      const res  = await fetch("/api/cartera-preventiva/activar", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al activar la cartera");
+      setActivarMessage("Cartera nueva activada. Actualizando la vista...");
+      await fetchStagingStatus();
+      fetchData(1);
+    } catch (err) {
+      setActivarError(err instanceof Error ? err.message : "Error inesperado");
+    } finally {
+      setActivando(false);
+    }
+  };
+
   return (
     <div className="p-5 pb-8 space-y-4">
       <div className={`${PANEL} animate-slide-down px-6 py-4 flex items-center justify-between flex-wrap gap-3`}>
         <h1 className="text-lg font-semibold text-gray-900">Cartera Preventiva</h1>
       </div>
+
+      {stagingCount > 0 && (
+        <div className="animate-slide-down bg-amber-50 border border-amber-200/80 rounded-2xl px-6 py-3.5 flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <p className="text-sm font-medium text-amber-900">
+              Hay una cartera nueva pendiente de cargar ({stagingCount.toLocaleString("es-CO")} cuotas)
+            </p>
+            <p className="text-xs text-amber-700 mt-0.5">Al activarla, la versión actual se archiva. Es irreversible desde esta pantalla — verifica antes de confirmar.</p>
+            {activarMessage && <p className="text-xs text-green-700 mt-1">{activarMessage}</p>}
+            {activarError && <p className="text-xs text-red-600 mt-1">{activarError}</p>}
+          </div>
+          <button
+            onClick={handleActivarCartera}
+            disabled={activando}
+            className="text-sm px-3.5 py-1.5 rounded-full bg-amber-600 text-white hover:bg-amber-700 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 whitespace-nowrap"
+          >
+            {activando ? "Activando..." : "Cargar Cartera"}
+          </button>
+        </div>
+      )}
 
       <div className={`${PANEL} animate-fade-in [animation-delay:60ms] px-6 py-4 space-y-3`}>
         <div className="flex gap-3 flex-wrap items-center">
@@ -658,6 +886,20 @@ export default function CarteraPreventivaView() {
                   const cuotaValue = cuotaEdits[row.llave] ?? String(row.valor_cuota);
                   const cuotaChanged = cuotaValue.trim() !== "" && Number(cuotaValue) !== row.valor_cuota && !Number.isNaN(Number(cuotaValue));
                   const puedeAsociar = multiInscripcionDocs.has(row.cruce_access);
+                  // Regla #4/#7: mensaje + botón de asociar saldo a favor —
+                  // no en la cuota que originó el saldo (esa ya muestra su
+                  // propio badge "Saldo a favor"), solo en las que necesitan
+                  // dinero (pendiente o pago parcial).
+                  const grupoKey = `${row.cruce_access}|${row.correo}`;
+                  const grupo = saldoPorGrupo.get(grupoKey);
+                  const esOrigenSaldo = !!grupo?.rows.some((s) => s.llave_origen === row.llave);
+                  const necesitaDinero = pendiente || parcial;
+                  const puedeAsociarSaldo = !!grupo && grupo.total > 0 && !esOrigenSaldo && necesitaDinero;
+                  const cuotaRestante = pendiente ? row.valor_a_cobrar : Math.abs(row.diferencia ?? 0);
+                  // Regla #3: descartar solo tiene sentido sobre un pago real
+                  // ya aplicado — un cierre manual de cartera no tiene pago
+                  // asociado que descartar.
+                  const puedeDescartar = !pendiente && row.medio_pago !== "Cartera" && row.notificacion !== "CARTERA";
                   return (
                   <tr key={row.id} className={`hover:bg-gray-50/70 transition-colors duration-100 align-top ${rowTint(row)}`}>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.llave)}</td>
@@ -731,6 +973,16 @@ export default function CarteraPreventivaView() {
                             className="text-xs px-2 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
                           >
                             {cierreOpen[row.llave] ? "Ocultar cierre" : "Cerrar cartera"}
+                          </button>
+                        )}
+                        {!pendiente && row.notificacion === "CARTERA" && (
+                          <button
+                            onClick={() => handleReabrirCartera(row)}
+                            disabled={saving}
+                            title="Deshace el cierre manual — la cuota vuelve a pendiente en el próximo cruce"
+                            className="text-xs px-2 py-1 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                          >
+                            Reabrir
                           </button>
                         )}
                         {cierreOpen[row.llave] && (
@@ -826,9 +1078,103 @@ export default function CarteraPreventivaView() {
                             )}
                           </div>
                         )}
+                        {puedeAsociarSaldo && (
+                          <div className="bg-teal-50/60 border border-teal-200/80 rounded-lg p-1.5 space-y-1">
+                            <p className="text-[11px] text-teal-800">
+                              Esta inscripción tiene un saldo a favor de {fmtMonto(grupo!.total)}
+                            </p>
+                            <button
+                              onClick={() => setAsociarSaldoOpen((prev) => ({ ...prev, [row.llave]: !prev[row.llave] }))}
+                              disabled={saving}
+                              className="text-xs px-2 py-1 rounded-lg border border-teal-300 text-teal-700 hover:bg-teal-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                            >
+                              {asociarSaldoOpen[row.llave] ? "Ocultar" : "Asociar pago"}
+                            </button>
+                            {asociarSaldoOpen[row.llave] && (
+                              <div className="animate-fade-in space-y-1 pt-1">
+                                {grupo!.rows.map((saldo) => {
+                                  const otroKey = `saldo:${saldo.id}:${row.llave}`;
+                                  const savingAction = rowSaving === otroKey;
+                                  const montoTodo = Math.min(saldo.disponible, cuotaRestante || saldo.disponible);
+                                  return (
+                                    <div key={saldo.id} className="bg-white border border-gray-200 rounded-lg p-1.5 space-y-1">
+                                      <p className="text-[11px] text-gray-600">
+                                        {fmt(saldo.cliente)} · {fmt(saldo.fecha)} · disponible {fmtMonto(saldo.disponible)}
+                                      </p>
+                                      <div className="flex items-center gap-1 text-[11px]">
+                                        <button
+                                          onClick={() => handleAsociarSaldo(row, saldo, montoTodo)}
+                                          disabled={savingAction}
+                                          className="px-1.5 py-0.5 rounded bg-teal-700 text-white hover:bg-teal-800 disabled:opacity-50"
+                                        >
+                                          {cuotaRestante && cuotaRestante < saldo.disponible ? "Todo lo que falta" : "Todo"}
+                                        </button>
+                                        <input
+                                          type="number"
+                                          placeholder="otro $"
+                                          value={saldoOtroValor[otroKey] || ""}
+                                          onChange={(e) => setSaldoOtroValor((prev) => ({ ...prev, [otroKey]: e.target.value }))}
+                                          className="w-16 border border-gray-300 rounded px-1 py-0.5"
+                                        />
+                                        <button
+                                          onClick={() => {
+                                            const monto = Number(saldoOtroValor[otroKey]);
+                                            if (Number.isFinite(monto) && monto > 0) handleAsociarSaldo(row, saldo, monto);
+                                          }}
+                                          disabled={savingAction}
+                                          className="px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                                        >
+                                          OK
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {puedeDescartar && (
+                          <button
+                            onClick={() => toggleDescartarPanel(row)}
+                            disabled={saving}
+                            className="text-xs px-2 py-1 rounded-lg border border-red-300 text-red-700 hover:bg-red-50 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                          >
+                            {descartarOpen[row.llave] ? "Ocultar descartar" : "Descartar pago"}
+                          </button>
+                        )}
+                        {descartarOpen[row.llave] && (
+                          <div className="animate-fade-in bg-red-50/60 border border-red-200/80 rounded-lg p-2 space-y-1.5 w-64">
+                            {descartarLoading[row.llave] ? (
+                              <p className="text-xs text-gray-500">Cargando...</p>
+                            ) : descartarError[row.llave] ? (
+                              <p className="text-xs text-red-600">{descartarError[row.llave]}</p>
+                            ) : (descartarData[row.llave] || []).length === 0 ? (
+                              <p className="text-[11px] text-gray-500">No hay pagos asociados a descartar.</p>
+                            ) : (
+                              (descartarData[row.llave] || []).map((asociacion) => {
+                                const savingAction = rowSaving === `descarte:${asociacion.id}`;
+                                return (
+                                  <div key={asociacion.id} className="bg-white border border-gray-200 rounded-lg p-1.5 flex items-center justify-between gap-2">
+                                    <p className="text-[11px] text-gray-600">
+                                      {fmt(asociacion.transaction_code_1)} · {fmt(asociacion.payment_date)} · {fmtMonto(asociacion.monto)}
+                                    </p>
+                                    <button
+                                      onClick={() => handleDescartarPago(row, asociacion)}
+                                      disabled={savingAction}
+                                      className="text-[11px] px-1.5 py-0.5 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 whitespace-nowrap"
+                                    >
+                                      {savingAction ? "..." : "Descartar"}
+                                    </button>
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+                        )}
                         {rowMessage[row.llave] && <span className="text-[11px] text-green-700">{rowMessage[row.llave]}</span>}
                         {rowError[row.llave] && <span className="text-[11px] text-red-600">{rowError[row.llave]}</span>}
-                        {!pendiente && !necesitaUltimaCuota(row) && !cierreOpen[row.llave] && !rowMessage[row.llave] && (
+                        {!pendiente && !necesitaUltimaCuota(row) && !cierreOpen[row.llave] && !puedeDescartar && !puedeAsociarSaldo && !rowMessage[row.llave] && (
                           <span className="text-xs text-gray-400">—</span>
                         )}
                       </div>

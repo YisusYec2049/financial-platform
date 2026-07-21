@@ -23,6 +23,7 @@ type PagoApartadoRow = {
   program: string | null;
   phone: string | null;
   payment_amount: number | null;
+  nota: string | null;
 };
 
 const TIPO_LABEL: Record<string, string> = {
@@ -30,6 +31,7 @@ const TIPO_LABEL: Record<string, string> = {
   cesantias: "Cesantías",
   pago_llave: "Pago por llave",
   cheque: "Cheque",
+  otros: "Otros",
 };
 
 const TIPO_BADGE: Record<string, string> = {
@@ -37,6 +39,7 @@ const TIPO_BADGE: Record<string, string> = {
   cesantias: "bg-emerald-50 text-emerald-700",
   pago_llave: "bg-amber-50 text-amber-700",
   cheque: "bg-rose-50 text-rose-700",
+  otros: "bg-slate-100 text-slate-700",
 };
 
 export default function PagosApartadosView() {
@@ -262,7 +265,7 @@ export default function PagosApartadosView() {
             </svg>
             <input
               type="text"
-              placeholder="Buscar por documento, código transacción o correo..."
+              placeholder="Buscar por documento, código transacción, correo o motivo..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className={`w-full ${INPUT} rounded-full pl-9 pr-3.5`}
@@ -278,6 +281,7 @@ export default function PagosApartadosView() {
             <option value="cesantias" className="text-gray-900">Cesantías</option>
             <option value="pago_llave" className="text-gray-900">Pago por llave</option>
             <option value="cheque" className="text-gray-900">Cheque</option>
+            <option value="otros" className="text-gray-900">Otros</option>
           </select>
         </div>
 
@@ -358,6 +362,7 @@ export default function PagosApartadosView() {
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Teléfono</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Valor</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">INCP Resuelto</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Nota</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Acciones</th>
               </tr>
             </thead>
@@ -365,7 +370,7 @@ export default function PagosApartadosView() {
               {loading && data.length === 0 ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 15 }).map((_, j) => (
+                    {Array.from({ length: 16 }).map((_, j) => (
                       <td key={j} className="px-4 py-3">
                         <div className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * j * 7) % 40}%` }} />
                       </td>
@@ -374,7 +379,7 @@ export default function PagosApartadosView() {
                 ))
               ) : data.length === 0 ? (
                 <tr>
-                  <td colSpan={15} className="text-center py-12 text-gray-400">No hay pagos apartados</td>
+                  <td colSpan={16} className="text-center py-12 text-gray-400">No hay pagos apartados</td>
                 </tr>
               ) : (
                 data.map((row, i) => {
@@ -386,7 +391,7 @@ export default function PagosApartadosView() {
                     <Fragment key={row.matching_key}>
                       {showGroupHeader && (
                         <tr key={`group-${row.matching_key}`} className="bg-gray-50/60">
-                          <td colSpan={15} className="px-4 py-1.5 text-xs font-medium text-gray-500">
+                          <td colSpan={16} className="px-4 py-1.5 text-xs font-medium text-gray-500">
                             Marcado el {fmt(row.fecha_marcada)}
                           </td>
                         </tr>
@@ -428,6 +433,7 @@ export default function PagosApartadosView() {
                             />
                           )}
                         </td>
+                        <td className="px-4 py-2.5 text-gray-600 text-xs max-w-[200px]">{fmt(row.nota)}</td>
                         <td className="px-4 py-2.5">
                           <div className="flex flex-col gap-1 min-w-[140px]">
                             {isCheque ? (

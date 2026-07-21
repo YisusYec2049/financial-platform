@@ -42,6 +42,10 @@ export async function POST(req: NextRequest) {
   const update: Record<string, unknown> = { llave };
   if (typeof body?.cerrado_manual === "boolean")        update.cerrado_manual = body.cerrado_manual;
   if (typeof body?.fecha_pago_manual === "string")      update.fecha_pago_manual = body.fecha_pago_manual;
+  // Reabrir (Regla #8): el body manda fecha_pago_manual: null explícito para
+  // limpiar el override tras cerrado_manual=false — sin este branch el `typeof
+  // === "string"` de arriba lo ignoraría y el pipeline vería una fecha vieja.
+  else if (body?.fecha_pago_manual === null)            update.fecha_pago_manual = null;
   if (typeof body?.valor_pago_manual === "number")      update.valor_pago_manual = body.valor_pago_manual;
   if (typeof body?.medio_pago_manual === "string")      update.medio_pago_manual = body.medio_pago_manual;
   if (typeof body?.valor_cuota_manual === "number")     update.valor_cuota_manual = body.valor_cuota_manual;

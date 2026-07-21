@@ -46,7 +46,11 @@ export async function GET(req: NextRequest) {
   if (cruceTo)      query = query.lte("fecha_cruce", cruceTo);
   if (conNotificacion) query = query.not("notificacion", "is", null).neq("notificacion", "");
 
+  // Regla #5 (Spec Auto Cartera): una cuota "FALTA DE PAGO" hereda inscrip y
+  // fecha_vencimiento de la cuota de la que se partió, así que ordenar por
+  // (inscrip, fecha_vencimiento) la deja justo debajo de su padre por defecto.
   query = query
+    .order("inscrip", { ascending: true })
     .order("fecha_vencimiento", { ascending: true })
     .range(offset, offset + pageSize - 1);
 

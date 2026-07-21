@@ -3,7 +3,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 
-const TIPOS_MARCABLES = ["matricula", "cesantias"] as const;
+const TIPOS_MARCABLES = ["matricula", "cesantias", "otros"] as const;
 
 export async function POST(req: NextRequest) {
   const { user, response } = await requireAuth(req);
@@ -13,9 +13,15 @@ export async function POST(req: NextRequest) {
   const matchingKey  = body?.matching_key as string | undefined;
   const tipo         = body?.tipo as string | undefined;
   const esPagoUnico  = body?.es_pago_unico === true;
+  const nota         = typeof body?.nota === "string" ? body.nota.trim().slice(0, 500) : null;
 
   if (!matchingKey || !tipo || !TIPOS_MARCABLES.includes(tipo as (typeof TIPOS_MARCABLES)[number])) {
-    return NextResponse.json({ error: "matching_key y tipo (matricula|cesantias) son requeridos" }, { status: 400 });
+    return NextResponse.json({ error: "matching_key y tipo (matricula|cesantias|otros) son requeridos" }, { status: 400 });
+  }
+  // Regla #1 (Spec Auto Cartera): "Otros" siempre necesita un motivo, a
+  // diferencia de matrícula/cesantías que no lo piden.
+  if (tipo === "otros" && !nota) {
+    return NextResponse.json({ error: "El motivo es requerido para apartar como \"Otros\"" }, { status: 400 });
   }
 
   const supabase = createAdminClient();
@@ -50,6 +56,7 @@ export async function POST(req: NextRequest) {
       program: tx.program,
       phone: tx.phone,
       payment_amount: tx.payment_amount,
+      nota,
     }, { onConflict: "matching_key" });
 
   if (upsertError) return NextResponse.json({ error: upsertError.message }, { status: 500 });
@@ -70,7 +77,7 @@ export async function POST(req: NextRequest) {
   logAudit({
     user_email: user.email ?? "unknown",
     action: "mark_apartado",
-    filters: { matching_key: matchingKey, tipo, es_pago_unico: esPagoUnico },
+    filters: { matching_key: matchingKey, tipo, es_pago_unico: esPagoUnico, nota },
     result_count: 1,
   });
 

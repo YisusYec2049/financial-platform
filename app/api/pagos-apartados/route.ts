@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
 
   if (search) {
     query = query.or(
-      `identification.ilike.%${search}%,transaction_code_1.ilike.%${search}%,email.ilike.%${search}%`
+      `identification.ilike.%${search}%,transaction_code_1.ilike.%${search}%,email.ilike.%${search}%,nota.ilike.%${search}%`
     );
   }
 
