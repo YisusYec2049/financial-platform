@@ -25,6 +25,7 @@ type ExcepcionRow = {
   ci: string | null;
   cruce: string | null;
   excepcion_motivo: string | null;
+  estado_cruce: string | null;
 };
 
 type EditState = { incp: string; correo_2: string; nombre: string; metodo_de_pago: string; ci: string };
@@ -550,7 +551,10 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
         delete next[row.matching_key];
         return next;
       });
-      setDocMessage((prev) => ({ ...prev, [row.matching_key]: "Documento corregido." }));
+      // La fila de cruce_cartera conserva a propósito el documento viejo (es la señal
+      // que usa matching-test para saber que hay que volver a cruzar), así que al
+      // recargar la vista se volverá a ver el anterior hasta que el pipeline reprocese.
+      setDocMessage((prev) => ({ ...prev, [row.matching_key]: "Documento corregido. Se aplicará en el próximo cruce." }));
       fireTrigger();
     } catch (err) {
       setDocError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
@@ -591,6 +595,8 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
             <option value="sin_identificar_pagador" className="text-gray-900">Pagador sin identificar</option>
             <option value="cruce_unico" className="text-gray-900">Solo Correo(2) (sin INCP)</option>
             <option value="pendiente_asignar_incp" className="text-gray-900">Pendiente de asignar INCP</option>
+            {/* No es un excepcion_motivo: el backend lo traduce a estado_cruce = 'no_identificable'. */}
+            <option value="no_identificable" className="text-gray-900">No identificado (cerrado a mano)</option>
           </select>
           <div className="relative w-64">
             <input
@@ -733,6 +739,9 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                   const isSinIdentificarPagador = row.excepcion_motivo === "sin_identificar_pagador";
                   const isCruceUnico = row.excepcion_motivo === "cruce_unico";
                   const isPendienteAsignarIncp = row.excepcion_motivo === "pendiente_asignar_incp";
+                  // Fila ya cerrada a mano ("No se puede identificar"): no hay nada que
+                  // corregir. Se muestra solo para consulta; guardar encima la reabriría.
+                  const isResuelta = row.estado_cruce === "no_identificable";
                   return (
                     <tr
                       key={row.matching_key}
@@ -799,6 +808,9 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                         {isDiscrepante && <span title="Discrepa con Correo(2)" className="text-purple-600 text-xs">⚠️</span>}
                         {isCruceUnico && <span title="Sin INCP identificado" className="text-teal-600 text-xs">⚠️</span>}
                         {isPendienteAsignarIncp && <span title="Correo/nombre registrado, falta que el equipo asigne el INCP" className="text-indigo-600 text-xs">⚠️</span>}
+                        {isResuelta ? (
+                          <span className="text-gray-700 whitespace-nowrap">{fmt(row.incp)}</span>
+                        ) : (
                         <input
                           type="text"
                           value={edit.incp}
@@ -808,11 +820,15 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                             isDiscrepante ? "border-purple-400" : isCruceUnico ? "border-teal-400" : isPendienteAsignarIncp ? "border-indigo-400" : "border-gray-300"
                           }`}
                         />
+                        )}
                       </div>
                     </td>
                     <td className={`px-4 py-2.5 ${isDiscrepante ? "bg-purple-50/60" : ""}`}>
                       <div className="flex items-center gap-1">
                         {isDiscrepante && <span title="Discrepa con INCP" className="text-purple-600 text-xs">⚠️</span>}
+                        {isResuelta ? (
+                          <span className="text-gray-700 whitespace-nowrap">{fmt(row.correo_2)}</span>
+                        ) : (
                         <input
                           type="text"
                           value={edit.correo_2}
@@ -822,6 +838,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                             isDiscrepante ? "border-purple-400" : "border-gray-300"
                           }`}
                         />
+                        )}
                       </div>
                     </td>
                     <td className={`px-4 py-2.5 ${isSinIdentificarPagador ? "bg-blue-50/60" : ""}`}>
@@ -865,9 +882,22 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                     </td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cruce)}</td>
                     <td className="px-4 py-2.5">
-                      <span className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${row.excepcion_motivo ? MOTIVO_BADGE[row.excepcion_motivo] ?? "bg-gray-100 text-gray-700" : "bg-gray-100 text-gray-700"}`}>
-                        {row.excepcion_motivo ? MOTIVO_LABEL[row.excepcion_motivo] ?? row.excepcion_motivo : "—"}
-                      </span>
+                      {isResuelta ? (
+                        <div className="flex flex-col gap-0.5">
+                          <span className="text-xs px-2 py-0.5 rounded-full whitespace-nowrap bg-gray-200 text-gray-700">
+                            No identificado
+                          </span>
+                          {row.excepcion_motivo && (
+                            <span className="text-[11px] text-gray-400 whitespace-nowrap">
+                              {MOTIVO_LABEL[row.excepcion_motivo] ?? row.excepcion_motivo}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${row.excepcion_motivo ? MOTIVO_BADGE[row.excepcion_motivo] ?? "bg-gray-100 text-gray-700" : "bg-gray-100 text-gray-700"}`}>
+                          {row.excepcion_motivo ? MOTIVO_LABEL[row.excepcion_motivo] ?? row.excepcion_motivo : "—"}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5">
                       <div className="flex flex-col gap-1 min-w-[190px]">
@@ -881,6 +911,12 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                             </div>
                           );
                         })}
+                        {isResuelta ? (
+                          <span className="text-[11px] text-gray-400">
+                            Cerrada a mano — no requiere acción.
+                          </span>
+                        ) : (
+                        <>
                         <textarea
                           placeholder="Nota sobre esta ambigüedad (opcional)..."
                           value={getNoteEdit(row)}
@@ -948,6 +984,8 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                               </>
                             )}
                           </div>
+                        )}
+                        </>
                         )}
                         {rowErr && <span className="text-xs text-red-600">{rowErr}</span>}
                       </div>

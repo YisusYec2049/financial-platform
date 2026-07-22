@@ -44,11 +44,12 @@ export async function POST(req: NextRequest) {
     .eq("matching_key", matchingKey);
   if (updateTxError) return NextResponse.json({ error: updateTxError.message }, { status: 500 });
 
-  // Best-effort: si la transacción ya tiene fila en cruce_cartera, corregirla también.
-  await supabase
-    .from("cruce_cartera")
-    .update({ identification: documentoCorregido })
-    .eq("matching_key", matchingKey);
+  // NO tocar cruce_cartera.identification: matching-test compara el documento
+  // guardado ahí contra el de consolidated_transactions para detectar que alguien
+  // corrigió y hay que volver a buscar el cruce. Si lo sobrescribimos aquí, se
+  // borra esa señal y las correcciones sobre pagos ya cerrados no hacen nada.
+  // Consecuencia esperada: la tab Excepciones sigue mostrando el documento viejo
+  // hasta que el pipeline reprocese la fila.
 
   const { error: correccionError } = await supabase
     .from("documento_correcciones")

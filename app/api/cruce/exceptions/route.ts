@@ -24,7 +24,11 @@ export async function GET(req: NextRequest) {
   let query = supabase
     .from("cruce_cartera")
     .select("*", { count: "exact" })
-    .eq("estado_cruce", "pendiente")
+    // Pendientes + los no_identificable que NO son de WOMPI: esos los cerró una
+    // persona a mano con "No se puede identificar" y se revisan aquí, ya resueltos.
+    // Los de WOMPI los cierra el pipeline solo y van a la tab "Todas".
+    // Ojo: el comodín de like en PostgREST es *, no %.
+    .or("estado_cruce.eq.pendiente,and(estado_cruce.eq.no_identificable,payment_method.not.like.WOMPI*)")
     .not("excepcion_motivo", "is", null);
 
   if (search) {
@@ -33,7 +37,10 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  if (excepcionMotivo) {
+  // Valor especial del dropdown: no es un excepcion_motivo, filtra por estado.
+  if (excepcionMotivo === "no_identificable") {
+    query = query.eq("estado_cruce", "no_identificable");
+  } else if (excepcionMotivo) {
     query = query.eq("excepcion_motivo", excepcionMotivo);
   }
 

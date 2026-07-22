@@ -30,7 +30,8 @@ export async function GET(req: NextRequest) {
     let query = supabase
       .from("cruce_cartera")
       .select("*")
-      .eq("estado_cruce", "pendiente")
+      // Mismo criterio que GET /api/cruce/exceptions (ver comentario allí).
+      .or("estado_cruce.eq.pendiente,and(estado_cruce.eq.no_identificable,payment_method.not.like.WOMPI*)")
       .not("excepcion_motivo", "is", null)
       .order("payment_date", { ascending: false })
       .range(from, from + batchSize - 1);
@@ -40,7 +41,12 @@ export async function GET(req: NextRequest) {
         `identification.ilike.%${search}%,transaction_code_1.ilike.%${search}%,email.ilike.%${search}%`
       );
     }
-    if (excepcionMotivo) query = query.eq("excepcion_motivo", excepcionMotivo);
+    // Valor especial del dropdown: no es un excepcion_motivo, filtra por estado.
+    if (excepcionMotivo === "no_identificable") {
+      query = query.eq("estado_cruce", "no_identificable");
+    } else if (excepcionMotivo) {
+      query = query.eq("excepcion_motivo", excepcionMotivo);
+    }
     if (incpCorreo) {
       query = query.or(`incp.ilike.%${incpCorreo}%,correo_2.ilike.%${incpCorreo}%`);
     }

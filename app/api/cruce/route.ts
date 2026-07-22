@@ -24,7 +24,11 @@ export async function GET(req: NextRequest) {
   let query = supabase
     .from("cruce_cartera")
     .select("*", { count: "exact" })
-    .neq("estado_cruce", "pendiente");
+    // Cruzadas + los no_identificable de WOMPI (que el pipeline cierra solo y se
+    // revisan aquí). Los no_identificable de otros bancos los marcó una persona a
+    // mano y ya están resueltos: viven en la tab Excepciones.
+    // Ojo: el comodín de like en PostgREST es *, no %.
+    .or("estado_cruce.eq.cruzado,and(estado_cruce.eq.no_identificable,payment_method.like.WOMPI*)");
 
   if (search) {
     query = query.or(
