@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo, forwardRef, useImperativeHandle } from "react";
 import * as XLSX from "xlsx";
 import { useSessionState } from "@/lib/useSessionState";
+import { useReproceso } from "@/lib/useReproceso";
 
 export type CruceExcepcionesViewRef = { refresh: () => void };
 
@@ -527,9 +528,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
 
   // El pipeline corre 1 vez al día; corregir el documento debe poder
   // reprocesarse de inmediato en vez de esperar al cron (spec §6).
-  const fireTrigger = () => {
-    fetch("/api/cruce/trigger", { method: "POST" }).catch(() => null);
-  };
+  const { fireTrigger, reprocesoBadge } = useReproceso(() => fetchData(page));
 
   const handleSaveDocumento = async (row: ExcepcionRow) => {
     const nuevo = (docEdits[row.matching_key] ?? row.identification).trim();
@@ -565,6 +564,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
 
   return (
     <div className="space-y-4">
+      {reprocesoBadge}
       <div className={`${PANEL} animate-fade-in px-6 py-4 space-y-3`}>
         <div className="flex gap-3 flex-wrap items-center">
           <div className="relative w-80">

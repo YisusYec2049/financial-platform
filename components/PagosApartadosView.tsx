@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useState, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
 import { useSessionState } from "@/lib/useSessionState";
+import { useReproceso } from "@/lib/useReproceso";
 
 type PagoApartadoRow = {
   matching_key: string;
@@ -123,9 +124,7 @@ export default function PagosApartadosView() {
   // desmarcar) debe poder reprocesarse de inmediato en vez de esperar al cron (spec §6).
   // Best-effort: si el trigger falla (ej. TRIGGER_TOKEN no configurado en este entorno),
   // no bloquea ni revierte la corrección ya guardada.
-  const fireTrigger = () => {
-    fetch("/api/cruce/trigger", { method: "POST" }).catch(() => null);
-  };
+  const { fireTrigger, reprocesoBadge } = useReproceso(() => fetchData(page));
 
   const buildDownloadParams = () => {
     const params = new URLSearchParams();
@@ -248,6 +247,7 @@ export default function PagosApartadosView() {
 
   return (
     <div className="p-5 pb-8 space-y-4">
+      {reprocesoBadge}
       <div className={`${PANEL} animate-slide-down px-6 py-4 flex items-center justify-between flex-wrap gap-3`}>
         <div className="flex items-center gap-3 flex-wrap">
           <h1 className="text-lg font-semibold text-gray-900">Pagos Apartados</h1>

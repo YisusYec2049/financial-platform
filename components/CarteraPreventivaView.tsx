@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { useSessionState } from "@/lib/useSessionState";
+import { useReproceso } from "@/lib/useReproceso";
 
 type CarteraPreventivaRow = {
   id: number;
@@ -436,9 +437,7 @@ export default function CarteraPreventivaView() {
   // El pipeline corre 1 vez al día; las acciones de confirmación de esta
   // vista (asociar pago, cerrar cartera, corregir valor cuota) deben poder
   // reprocesarse de inmediato en vez de esperar al cron (spec §6).
-  const fireTrigger = () => {
-    fetch("/api/cruce/trigger", { method: "POST" }).catch(() => null);
-  };
+  const { fireTrigger, reprocesoBadge } = useReproceso(() => fetchData(page));
 
   const toggleAsociarPanel = async (row: CarteraPreventivaRow) => {
     const doc = row.cruce_access;
@@ -696,6 +695,7 @@ export default function CarteraPreventivaView() {
 
   return (
     <div className="p-5 pb-8 space-y-4">
+      {reprocesoBadge}
       <div className={`${PANEL} animate-slide-down px-6 py-4 flex items-center justify-between flex-wrap gap-3`}>
         <h1 className="text-lg font-semibold text-gray-900">Cartera Preventiva</h1>
       </div>

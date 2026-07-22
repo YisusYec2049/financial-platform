@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import * as XLSX from "xlsx";
 import { useSessionState } from "@/lib/useSessionState";
+import { useReproceso } from "@/lib/useReproceso";
 
 type Transaction = {
   id: string;
@@ -278,9 +279,7 @@ export default function TransactionsView() {
   // matrícula/cesantías, corregir el documento) debe poder reprocesarse de
   // inmediato en vez de esperar al cron (spec §6). Best-effort: si falla, no
   // bloquea ni revierte lo ya guardado.
-  const fireTrigger = () => {
-    fetch("/api/cruce/trigger", { method: "POST" }).catch(() => null);
-  };
+  const { fireTrigger, reprocesoBadge } = useReproceso(() => fetchData(page));
 
   const handleMarcar = async (row: Transaction, tipo: "matricula" | "cesantias" | "otros") => {
     const nota = tipo === "otros" ? (otrosNota[row.matching_key] ?? "").trim() : undefined;
@@ -389,6 +388,7 @@ export default function TransactionsView() {
 
   return (
     <div className="p-5 pb-8 space-y-4">
+      {reprocesoBadge}
       {/* Header */}
       <div className={`${PANEL} animate-slide-down px-6 py-4 flex items-center justify-between flex-wrap gap-3`}>
         <div className="flex items-center gap-3 flex-wrap">
