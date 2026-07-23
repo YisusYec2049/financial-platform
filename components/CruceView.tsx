@@ -119,6 +119,35 @@ function SegmentedControl({
   );
 }
 
+function buildXlsx(rows: Record<string, unknown>[], filename: string, sheetName: string) {
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  XLSX.writeFile(wb, filename);
+}
+
+function buildCsv(rows: Record<string, unknown>[], filename: string) {
+  if (rows.length === 0) return;
+  const headers = Object.keys(rows[0]);
+  const csvLines = [
+    headers.join(","),
+    ...rows.map((row) =>
+      headers.map((h) => {
+        const val = row[h] ?? "";
+        const str = String(val).replace(/"/g, '""');
+        return str.includes(",") || str.includes("\n") || str.includes('"') ? `"${str}"` : str;
+      }).join(",")
+    ),
+  ];
+  const blob = new Blob([csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 type CruceRow = {
   matching_key: string;
   identification: string;
@@ -155,11 +184,13 @@ export default function CruceView() {
   const [methods, setMethods]             = useState<{ label: string; value: string }[]>([]);
   const [fetchError, setFetchError]       = useState("");
   const [dropdownOpen, setDropdownOpen]   = useState(false);
+  const [wompiDropdownOpen, setWompiDropdownOpen] = useState(false);
   const searchTimeout                     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef                = useRef<AbortController | null>(null);
   const tableContainerRef                 = useRef<HTMLDivElement>(null);
   const excepcionesRef                    = useRef<CruceExcepcionesViewRef>(null);
   const dropdownRef                       = useRef<HTMLDivElement>(null);
+  const wompiDropdownRef                   = useRef<HTMLDivElement>(null);
 
   const PAGE_SIZE = 100;
 
@@ -235,6 +266,9 @@ export default function CruceView() {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setDropdownOpen(false);
       }
+      if (wompiDropdownRef.current && !wompiDropdownRef.current.contains(e.target as Node)) {
+        setWompiDropdownOpen(false);
+      }
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
@@ -265,10 +299,7 @@ export default function CruceView() {
       if (json.truncated) {
         setFetchError("Se descargaron las primeras 50,000 filas. Usa los filtros para acotar la búsqueda.");
       }
-      const ws = XLSX.utils.json_to_sheet(allRows);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Cruce de Cartera");
-      XLSX.writeFile(wb, `cruce_cartera_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      buildXlsx(allRows, `cruce_cartera_${new Date().toISOString().slice(0, 10)}.xlsx`, "Cruce de Cartera");
     } catch (err) {
       setFetchError(err instanceof Error ? err.message : "Error al descargar el archivo");
     } finally {
@@ -288,27 +319,49 @@ export default function CruceView() {
         setFetchError("Se descargaron las primeras 50,000 filas. Usa los filtros para acotar la búsqueda.");
       }
       const rows: Record<string, unknown>[] = json.data || [];
-      if (rows.length === 0) return;
+      buildCsv(rows, `cruce_cartera_${new Date().toISOString().slice(0, 10)}.csv`);
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : "Error al descargar el archivo");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-      const headers = Object.keys(rows[0]);
-      const csvLines = [
-        headers.join(","),
-        ...rows.map((row) =>
-          headers.map((h) => {
-            const val = row[h] ?? "";
-            const str = String(val).replace(/"/g, '""');
-            return str.includes(",") || str.includes("\n") || str.includes('"') ? `"${str}"` : str;
-          }).join(",")
-        ),
-      ];
-
-      const blob = new Blob([csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a");
-      a.href     = url;
-      a.download = `cruce_cartera_${new Date().toISOString().slice(0, 10)}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+  // Reporte "WOMPI del día": todos los WOMPI (identificados y no identificados) del día
+  // por fecha de ingreso. Usa el filtro reg_from/reg_to de la vista si está puesto; si no, hoy.
+  const downloadWompiReport = async (format: "excel" | "csv") => {
+    setWompiDropdownOpen(false);
+    setLoading(true);
+    setFetchError("");
+    try {
+      const hoy = new Date().toISOString().slice(0, 10);
+      const rf = regFrom || hoy;
+      const rt = regTo   || hoy;
+      const params = new URLSearchParams({ reg_from: rf, reg_to: rt });
+      const res  = await fetch(`/api/cruce/wompi-report/download?${params}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al descargar");
+      if (json.truncated) {
+        setFetchError("Se descargaron las primeras 50,000 filas. Usa los filtros para acotar la búsqueda.");
+      }
+      const rows: Record<string, unknown>[] = json.data || [];
+      if (rows.length === 0) {
+        setFetchError("No hay pagos WOMPI para ese día (fecha de ingreso).");
+        return;
+      }
+      // Dos columnas legibles al frente, sin quitar ninguna columna cruda del cruce.
+      const enriched = rows.map((r) => ({
+        "Método WOMPI":
+          r.metodo_de_pago === "PAGOS MANUALES"
+            ? "Manual"
+            : r.metodo_de_pago
+            ? "Automático (Genera Link)"
+            : "",
+        "Identificación": r.estado_cruce === "cruzado" ? "Identificado" : "No identificado",
+        ...r,
+      }));
+      if (format === "excel") buildXlsx(enriched, `wompi_del_dia_${rt}.xlsx`, "WOMPI del día");
+      else buildCsv(enriched, `wompi_del_dia_${rt}.csv`);
     } catch (err) {
       setFetchError(err instanceof Error ? err.message : "Error al descargar el archivo");
     } finally {
@@ -444,6 +497,39 @@ export default function CruceView() {
           {loading ? "Cargando..." : `${total.toLocaleString("es-CO")} registros encontrados`}
         </span>
 
+        <div className="flex items-center gap-2">
+        <div ref={wompiDropdownRef} className="relative">
+          <button
+            onClick={() => setWompiDropdownOpen((o) => !o)}
+            disabled={loading}
+            className="flex items-center gap-1.5 bg-violet-600 text-white text-sm px-3.5 py-1.5 rounded-full shadow-sm hover:bg-violet-700 hover:brightness-105 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Reporte WOMPI del día
+            <svg className={`w-3 h-3 ml-0.5 transition-transform duration-200 ease-(--ease-spring) ${wompiDropdownOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {wompiDropdownOpen && (
+            <div className="animate-pop-in origin-top-right absolute right-0 mt-1.5 w-44 bg-white border border-black/[0.06] rounded-xl shadow-[0_8px_24px_-8px_rgba(0,0,0,0.2)] z-50 overflow-hidden py-1">
+              <button
+                onClick={() => downloadWompiReport("excel")}
+                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-100"
+              >
+                Descargar Excel
+              </button>
+              <button
+                onClick={() => downloadWompiReport("csv")}
+                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-100"
+              >
+                Descargar CSV
+              </button>
+            </div>
+          )}
+        </div>
+
         <div ref={dropdownRef} className="relative">
           <button
             onClick={() => setDropdownOpen((o) => !o)}
@@ -474,6 +560,7 @@ export default function CruceView() {
               </button>
             </div>
           )}
+        </div>
         </div>
       </div>
 
