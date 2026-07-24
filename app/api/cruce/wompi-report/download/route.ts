@@ -3,10 +3,17 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 
-// Reporte "WOMPI del día": TODOS los WOMPI (identificados y no identificados),
-// cualquier estado_cruce, filtrados solo por fecha de ingreso (registration_date).
-// A diferencia de /api/cruce/download, NO aplica el filtro de estado, así que
-// también incluye los `pendiente` (WOMPI no identificados de la pestaña Excepciones).
+// Reporte "WOMPI del día" — reporte de MÉTRICAS: cuánto se usa el link (automático)
+// frente al pago manual. Por eso tiene que traer TODOS los WOMPI que entraron ese
+// día, sin excepción.
+//
+// Lee `consolidated_transactions`, NO `cruce_cartera`: de esa tabla se borra un pago
+// cuando se aparta (matrícula, cesantías, cheque…), así que el reporte perdía filas
+// en silencio — medido el 23/07: 75 WOMPI entraron, el cruce solo veía 64, faltaban
+// 11 por $9.050.627, todos marcados como matrícula.
+//
+// El día es la FECHA DE INGRESO (`registration_date`), no la fecha en que el cliente
+// pagó (que suele ser días antes).
 export async function GET(req: NextRequest) {
   const { user, response } = await requireAuth(req);
   if (response) return response;
@@ -26,9 +33,9 @@ export async function GET(req: NextRequest) {
     const batchSize = Math.min(BATCH, remaining);
 
     let query = supabase
-      .from("cruce_cartera")
+      .from("consolidated_transactions")
       .select("*")
-      .ilike("payment_method", "WOMPI%") // TODOS los WOMPI, cualquier estado_cruce
+      .ilike("payment_method", "WOMPI%")
       .order("payment_date", { ascending: false })
       .range(from, from + batchSize - 1);
 

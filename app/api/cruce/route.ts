@@ -24,11 +24,11 @@ export async function GET(req: NextRequest) {
   let query = supabase
     .from("cruce_cartera")
     .select("*", { count: "exact" })
-    // Cruzadas + los no_identificable de WOMPI (que el pipeline cierra solo y se
-    // revisan aquí). Los no_identificable de otros bancos los marcó una persona a
-    // mano y ya están resueltos: viven en la tab Excepciones.
-    // Ojo: el comodín de like en PostgREST es *, no %.
-    .or("estado_cruce.eq.cruzado,and(estado_cruce.eq.no_identificable,payment_method.like.WOMPI*)");
+    // Solo cruzadas. Los no_identificable (de cualquier banco, WOMPI incluido) los
+    // marcó una persona a mano y se quedan en la tab Excepciones — el pipeline ya
+    // no cierra WOMPI solo, así que no llenan la pantalla y ahí es donde se
+    // vuelven a mirar si algún día su documento empieza a cruzar (spec 23/07 §4).
+    .eq("estado_cruce", "cruzado");
 
   if (search) {
     query = query.or(

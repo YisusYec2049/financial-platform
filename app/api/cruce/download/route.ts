@@ -30,8 +30,8 @@ export async function GET(req: NextRequest) {
     let query = supabase
       .from("cruce_cartera")
       .select("*")
-      // Mismo criterio que GET /api/cruce (ver comentario allí).
-      .or("estado_cruce.eq.cruzado,and(estado_cruce.eq.no_identificable,payment_method.like.WOMPI*)")
+      // Mismo criterio que GET /api/cruce (ver comentario allí): solo cruzadas.
+      .eq("estado_cruce", "cruzado")
       .order("payment_date", { ascending: false })
       .range(from, from + batchSize - 1);
 

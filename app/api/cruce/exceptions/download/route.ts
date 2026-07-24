@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
       .from("cruce_cartera")
       .select("*")
       // Mismo criterio que GET /api/cruce/exceptions (ver comentario allí).
-      .or("estado_cruce.eq.pendiente,and(estado_cruce.eq.no_identificable,payment_method.not.like.WOMPI*)")
+      .or("estado_cruce.eq.pendiente,estado_cruce.eq.no_identificable")
       .not("excepcion_motivo", "is", null)
       .order("payment_date", { ascending: false })
       .range(from, from + batchSize - 1);

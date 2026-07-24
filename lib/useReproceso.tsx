@@ -19,9 +19,16 @@ const MAX_MS   = 15 * 60 * 1000;
  *
  * El POST sigue siendo best-effort (`.catch`) — si el VPS no responde, la acción del usuario no se
  * rompe, solo no hay reproceso. Ver §3 y §4 del "Spec — Reproceso inmediato".
+ *
+ * Marcado POR FILA (spec 23/07 §3): `fireTrigger(clave)` deja esa fila marcada "recalculando…"
+ * mientras la corrida está en curso, y el conjunto se limpia solo al terminar. Sirve para que el
+ * cambio se vea al instante sin esperar los 2-5 minutos del recálculo, y para que una fila que
+ * por el cambio deja de pertenecer a la pantalla no se esfume de golpe: se queda marcada hasta
+ * que el recálculo termina y ahí sí desaparece con el refetch.
  */
 export function useReproceso(onDone?: () => void) {
   const [reprocesando, setReprocesando] = useState(false);
+  const [recalculando, setRecalculando] = useState<Set<string>>(new Set());
 
   const pollRef      = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedAtRef = useRef(0);
@@ -39,6 +46,7 @@ export function useReproceso(onDone?: () => void) {
   const finish = useCallback(() => {
     stopPolling();
     setReprocesando(false);
+    setRecalculando(new Set());
     onDoneRef.current?.();
   }, [stopPolling]);
 
@@ -68,15 +76,37 @@ export function useReproceso(onDone?: () => void) {
     }, POLL_MS);
   }, [stopPolling, finish]);
 
-  const fireTrigger = useCallback(() => {
+  /** `clave` identifica la fila tocada (llave, matching_key, documento…) para marcarla. */
+  const fireTrigger = useCallback((clave?: string) => {
     setReprocesando(true);
+    if (clave) setRecalculando((prev) => new Set(prev).add(clave));
     fetch("/api/cruce/reproceso", { method: "POST" })
       .then((res) => {
         if (!res.ok) throw new Error();
         startPolling();
       })
-      .catch(() => { stopPolling(); setReprocesando(false); });
+      .catch(() => {
+        // Sin reproceso no hay nada que esperar: se quita la marca y se deja el cambio
+        // ya guardado tal como está en pantalla (no se refresca, para no pisar la
+        // actualización optimista con datos que el pipeline todavía no tocó).
+        stopPolling();
+        setReprocesando(false);
+        setRecalculando(new Set());
+      });
   }, [startPolling, stopPolling]);
+
+  const isRecalculando = useCallback((clave: string) => recalculando.has(clave), [recalculando]);
+
+  /** Píldora por fila — se pone junto al cambio que el usuario acaba de hacer. */
+  const marcaFila = (clave: string) =>
+    recalculando.has(clave) ? (
+      <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200/80 rounded-full px-1.5 py-0.5 whitespace-nowrap">
+        <svg className="w-2.5 h-2.5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        Recalculando…
+      </span>
+    ) : null;
 
   const reprocesoBadge = reprocesando ? (
     <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 bg-white/95 backdrop-blur border border-gray-200 shadow-lg rounded-full pl-3 pr-4 py-2 animate-fade-in">
@@ -87,5 +117,5 @@ export function useReproceso(onDone?: () => void) {
     </div>
   ) : null;
 
-  return { fireTrigger, reprocesando, reprocesoBadge };
+  return { fireTrigger, reprocesando, reprocesoBadge, isRecalculando, marcaFila };
 }

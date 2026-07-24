@@ -388,21 +388,6 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
     }));
   };
 
-  const removeRow = (matchingKey: string) => {
-    setData((prev) => prev.filter((r) => r.matching_key !== matchingKey));
-    setTotal((prev) => Math.max(0, prev - 1));
-    setEdits((prev) => {
-      const next = { ...prev };
-      delete next[matchingKey];
-      return next;
-    });
-    setNoteEdits((prev) => {
-      const next = { ...prev };
-      delete next[matchingKey];
-      return next;
-    });
-  };
-
   const getNoteEdit = (row: ExcepcionRow): string => {
     if (noteEdits[row.matching_key] !== undefined) return noteEdits[row.matching_key];
     for (const k of noteKeysForRow(row)) {
@@ -449,7 +434,13 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al guardar");
       await persistNote(row);
-      removeRow(row.matching_key);
+      // La fila pasa a `cruzado`, así que deja de pertenecer a esta pestaña — pero NO
+      // se quita de golpe (§3): se queda marcada "recalculando…" con el valor ya
+      // corregido a la vista y se va sola cuando el reproceso termina y refresca.
+      setData((prev) => prev.map((r) => r.matching_key === row.matching_key
+        ? { ...r, incp: edit.incp, correo_2: edit.correo_2, nombre: edit.nombre, metodo_de_pago: edit.metodo_de_pago, ci: edit.ci, estado_cruce: "cruzado" }
+        : r));
+      fireTrigger(row.matching_key);
     } catch (err) {
       setRowActionError((prev) => ({
         ...prev,
@@ -475,7 +466,11 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al guardar");
       await persistNote(row);
-      removeRow(row.matching_key);
+      // Un pago que no se logra identificar vive en Excepciones y no sale (§4), así
+      // que la fila se queda: solo pasa a su presentación de solo consulta.
+      setData((prev) => prev.map((r) => r.matching_key === row.matching_key
+        ? { ...r, estado_cruce: "no_identificable" }
+        : r));
     } catch (err) {
       setRowActionError((prev) => ({
         ...prev,
@@ -519,7 +514,10 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al descartar");
       setDiscardCandidates((prev) => ({ ...prev, [key]: (prev[key] || []).filter((c) => c !== candidate) }));
-      setDiscardMessage((prev) => ({ ...prev, [key]: "Se descartó este número. La fila se actualizará automáticamente en el próximo cruce." }));
+      setDiscardMessage((prev) => ({ ...prev, [key]: "Se descartó este número. La fila se actualiza sola al terminar el recálculo." }));
+      // §3: era uno de los 3 huecos — el descarte se guardaba y no pasaba nada más
+      // hasta la corrida del día siguiente.
+      fireTrigger(key);
     } catch (err) {
       setDiscardError((prev) => ({ ...prev, [key]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
@@ -529,7 +527,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
 
   // El pipeline corre 1 vez al día; corregir el documento debe poder
   // reprocesarse de inmediato en vez de esperar al cron (spec §6).
-  const { fireTrigger, reprocesoBadge } = useReproceso(() => fetchData(page));
+  const { fireTrigger, reprocesoBadge, isRecalculando, marcaFila } = useReproceso(() => fetchData(page));
 
   const handleSaveDocumento = async (row: ExcepcionRow) => {
     const nuevo = (docEdits[row.matching_key] ?? row.identification).trim();
@@ -554,8 +552,8 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
       // La fila de cruce_cartera conserva a propósito el documento viejo (es la señal
       // que usa matching-test para saber que hay que volver a cruzar), así que al
       // recargar la vista se volverá a ver el anterior hasta que el pipeline reprocese.
-      setDocMessage((prev) => ({ ...prev, [row.matching_key]: "Documento corregido. Se aplicará en el próximo cruce." }));
-      fireTrigger();
+      setDocMessage((prev) => ({ ...prev, [row.matching_key]: "Documento corregido. Se aplicará al terminar el recálculo." }));
+      fireTrigger(row.matching_key);
     } catch (err) {
       setDocError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
@@ -742,6 +740,12 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                   // Fila ya cerrada a mano ("No se puede identificar"): no hay nada que
                   // corregir. Se muestra solo para consulta; guardar encima la reabriría.
                   const isResuelta = row.estado_cruce === "no_identificable";
+                  // §3: corregida hace un momento — sigue en pantalla, marcada, hasta que
+                  // el recálculo termine y el refetch se la lleve.
+                  const recalculando = isRecalculando(row.matching_key);
+                  const yaCorregida  = recalculando && row.estado_cruce === "cruzado";
+                  // Sin botones que las guarden, dejar los campos editables sería una trampa visual.
+                  const soloLectura  = isResuelta || yaCorregida;
                   return (
                     <tr
                       key={row.matching_key}
@@ -808,7 +812,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                         {isDiscrepante && <span title="Discrepa con Correo(2)" className="text-purple-600 text-xs">⚠️</span>}
                         {isCruceUnico && <span title="Sin INCP identificado" className="text-teal-600 text-xs">⚠️</span>}
                         {isPendienteAsignarIncp && <span title="Correo/nombre registrado, falta que el equipo asigne el INCP" className="text-indigo-600 text-xs">⚠️</span>}
-                        {isResuelta ? (
+                        {soloLectura ? (
                           <span className="text-gray-700 whitespace-nowrap">{fmt(row.incp)}</span>
                         ) : (
                         <input
@@ -826,7 +830,7 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                     <td className={`px-4 py-2.5 ${isDiscrepante ? "bg-purple-50/60" : ""}`}>
                       <div className="flex items-center gap-1">
                         {isDiscrepante && <span title="Discrepa con INCP" className="text-purple-600 text-xs">⚠️</span>}
-                        {isResuelta ? (
+                        {soloLectura ? (
                           <span className="text-gray-700 whitespace-nowrap">{fmt(row.correo_2)}</span>
                         ) : (
                         <input
@@ -911,7 +915,12 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                             </div>
                           );
                         })}
-                        {isResuelta ? (
+                        {marcaFila(row.matching_key)}
+                        {yaCorregida ? (
+                          <span className="text-[11px] text-green-700">
+                            Corrección guardada. La fila sale de Excepciones al terminar el recálculo.
+                          </span>
+                        ) : isResuelta ? (
                           <span className="text-[11px] text-gray-400">
                             Cerrada a mano — no requiere acción.
                           </span>

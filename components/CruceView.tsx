@@ -327,8 +327,11 @@ export default function CruceView() {
     }
   };
 
-  // Reporte "WOMPI del día": todos los WOMPI (identificados y no identificados) del día
-  // por fecha de ingreso. Usa el filtro reg_from/reg_to de la vista si está puesto; si no, hoy.
+  // Reporte "WOMPI del día": TODOS los WOMPI que entraron ese día (fecha de ingreso),
+  // leídos del consolidado — incluidos los apartados, que ya no están en el cruce.
+  // Es un reporte de métricas link vs. manual, así que no lleva estado del cruce ni
+  // marca de apartado: las columnas del consolidado + una sola que dice el método.
+  // Usa el filtro reg_from/reg_to de la vista si está puesto; si no, hoy.
   const downloadWompiReport = async (format: "excel" | "csv") => {
     setWompiDropdownOpen(false);
     setLoading(true);
@@ -349,15 +352,16 @@ export default function CruceView() {
         setFetchError("No hay pagos WOMPI para ese día (fecha de ingreso).");
         return;
       }
-      // Dos columnas legibles al frente, sin quitar ninguna columna cruda del cruce.
+      // Una sola columna legible al frente. `metodo_de_pago` la llena el pipeline en
+      // cada corrida para todos los WOMPI; si viene vacía es que aún no ha corrido
+      // sobre ese pago, y se deja vacía en vez de adivinar.
       const enriched = rows.map((r) => ({
         "Método WOMPI":
           r.metodo_de_pago === "PAGOS MANUALES"
             ? "Manual"
-            : r.metodo_de_pago
-            ? "Automático (Genera Link)"
+            : r.metodo_de_pago === "WOMPI (Genera Link)"
+            ? "Automático"
             : "",
-        "Identificación": r.estado_cruce === "cruzado" ? "Identificado" : "No identificado",
         ...r,
       }));
       if (format === "excel") buildXlsx(enriched, `wompi_del_dia_${rt}.xlsx`, "WOMPI del día");

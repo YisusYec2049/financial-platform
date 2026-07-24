@@ -279,7 +279,7 @@ export default function TransactionsView() {
   // matrícula/cesantías, corregir el documento) debe poder reprocesarse de
   // inmediato en vez de esperar al cron (spec §6). Best-effort: si falla, no
   // bloquea ni revierte lo ya guardado.
-  const { fireTrigger, reprocesoBadge } = useReproceso(() => fetchData(page));
+  const { fireTrigger, reprocesoBadge, marcaFila } = useReproceso(() => fetchData(page));
 
   const handleMarcar = async (row: Transaction, tipo: "matricula" | "cesantias" | "otros") => {
     const nota = tipo === "otros" ? (otrosNota[row.matching_key] ?? "").trim() : undefined;
@@ -306,7 +306,7 @@ export default function TransactionsView() {
       setData((prev) => prev.map((r) => r.matching_key === row.matching_key ? { ...r, categoria: tipo } : r));
       setRowMessage((prev) => ({ ...prev, [row.matching_key]: "Marcado. Sale del proceso en el próximo cruce." }));
       setOtrosPanelOpen((prev) => ({ ...prev, [row.matching_key]: false }));
-      fireTrigger();
+      fireTrigger(row.matching_key);
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
@@ -327,7 +327,7 @@ export default function TransactionsView() {
       if (wasCesantias && row.transaction_code_1) {
         setRemovePatternOffer((prev) => ({ ...prev, [row.matching_key]: row.transaction_code_1 }));
       }
-      fireTrigger();
+      fireTrigger(row.matching_key);
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
@@ -371,7 +371,7 @@ export default function TransactionsView() {
         return next;
       });
       setRowMessage((prev) => ({ ...prev, [row.matching_key]: "Documento corregido. Se recuerda para pagos futuros con el mismo documento." }));
-      fireTrigger();
+      fireTrigger(row.matching_key);
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
@@ -738,6 +738,7 @@ export default function TransactionsView() {
                             </div>
                           </div>
                         )}
+                        {marcaFila(row.matching_key)}
                         {rowMessage[row.matching_key] && (
                           <span className="text-[11px] text-green-700">{rowMessage[row.matching_key]}</span>
                         )}

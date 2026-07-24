@@ -58,6 +58,7 @@ export default function PagosApartadosView() {
   const [rowError, setRowError]     = useState<Record<string, string>>({});
   const [rowMessage, setRowMessage] = useState<Record<string, string>>({});
   const [savingKey, setSavingKey]   = useState<string | null>(null);
+  const [desmarcadas, setDesmarcadas] = useState<Set<string>>(new Set());
   const searchTimeout    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const tableContainerRef  = useRef<HTMLDivElement>(null);
@@ -124,7 +125,7 @@ export default function PagosApartadosView() {
   // desmarcar) debe poder reprocesarse de inmediato en vez de esperar al cron (spec §6).
   // Best-effort: si el trigger falla (ej. TRIGGER_TOKEN no configurado en este entorno),
   // no bloquea ni revierte la corrección ya guardada.
-  const { fireTrigger, reprocesoBadge } = useReproceso(() => fetchData(page));
+  const { fireTrigger, reprocesoBadge, marcaFila } = useReproceso(() => fetchData(page));
 
   const buildDownloadParams = () => {
     const params = new URLSearchParams();
@@ -213,7 +214,7 @@ export default function PagosApartadosView() {
       if (!res.ok) throw new Error(json.error || "Error al guardar");
       setData((prev) => prev.map((r) => r.matching_key === row.matching_key ? { ...r, incp_resuelto: incpResuelto || null } : r));
       setRowMessage((prev) => ({ ...prev, [row.matching_key]: "INCP guardado. Vuelve al proceso en el próximo cruce." }));
-      fireTrigger();
+      fireTrigger(row.matching_key);
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
@@ -228,9 +229,12 @@ export default function PagosApartadosView() {
       const res  = await fetch(`/api/pagos-apartados?matching_key=${encodeURIComponent(row.matching_key)}`, { method: "DELETE" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al desmarcar");
-      setData((prev) => prev.filter((r) => r.matching_key !== row.matching_key));
-      setTotal((prev) => Math.max(0, prev - 1));
-      fireTrigger();
+      // §3: la fila deja de pertenecer a esta pantalla, pero NO se quita de golpe —
+      // se queda marcada hasta que el recálculo termina, para que se alcance a ver
+      // que quedó bien. El refetch de onDone se la lleva.
+      setDesmarcadas((prev) => new Set(prev).add(row.matching_key));
+      setRowMessage((prev) => ({ ...prev, [row.matching_key]: "Desmarcado. Vuelve al flujo normal al terminar el recálculo." }));
+      fireTrigger(row.matching_key);
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
@@ -438,6 +442,10 @@ export default function PagosApartadosView() {
                           <div className="flex flex-col gap-1 min-w-[140px]">
                             {isCheque ? (
                               <span className="text-xs text-gray-400">Solo descarga — no vuelve al proceso</span>
+                            ) : desmarcadas.has(row.matching_key) ? (
+                              // Ya desmarcada: sigue visible mientras recalcula, sin botones
+                              // que la puedan volver a tocar.
+                              <span className="text-xs text-gray-400">Desmarcado — sale de este panel al terminar</span>
                             ) : (
                               <>
                                 <button
@@ -456,6 +464,7 @@ export default function PagosApartadosView() {
                                 </button>
                               </>
                             )}
+                            {marcaFila(row.matching_key)}
                             {rowMessage[row.matching_key] && (
                               <span className="text-xs text-green-700">{rowMessage[row.matching_key]}</span>
                             )}

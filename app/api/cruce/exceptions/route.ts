@@ -24,11 +24,11 @@ export async function GET(req: NextRequest) {
   let query = supabase
     .from("cruce_cartera")
     .select("*", { count: "exact" })
-    // Pendientes + los no_identificable que NO son de WOMPI: esos los cerró una
-    // persona a mano con "No se puede identificar" y se revisan aquí, ya resueltos.
-    // Los de WOMPI los cierra el pipeline solo y van a la tab "Todas".
-    // Ojo: el comodín de like en PostgREST es *, no %.
-    .or("estado_cruce.eq.pendiente,and(estado_cruce.eq.no_identificable,payment_method.not.like.WOMPI*)")
+    // Pendientes + TODOS los no_identificable, sin distinguir banco: un pago que
+    // no se logra identificar vive aquí y no sale (spec 23/07 §4). Antes los de
+    // WOMPI se iban a la tab "Todas" porque el pipeline los cerraba solo; ya no
+    // lo hace, y los 24 que hay están todos marcados a mano.
+    .or("estado_cruce.eq.pendiente,estado_cruce.eq.no_identificable")
     .not("excepcion_motivo", "is", null);
 
   if (search) {

@@ -77,6 +77,12 @@ type AsociacionRow = {
   payment_date: string | null;
 };
 
+// Polling del swap de versión de "Cargar Cartera" (§3). GRACE cubre el instante
+// entre el POST y que el VPS marque la corrida como running.
+const ACTIVAR_POLL_MS  = 3000;
+const ACTIVAR_GRACE_MS = 10000;
+const ACTIVAR_MAX_MS   = 5 * 60 * 1000;
+
 export default function CarteraPreventivaView() {
   const [data, setData]                 = useState<CarteraPreventivaRow[]>([]);
   const [total, setTotal]               = useState(0);
@@ -122,6 +128,21 @@ export default function CarteraPreventivaView() {
   const [activando, setActivando]               = useState(false);
   const [activarMessage, setActivarMessage]     = useState("");
   const [activarError, setActivarError]         = useState("");
+  const [agregarOpen, setAgregarOpen]           = useState(false);
+  const [agregarForm, setAgregarForm]           = useState({
+    cruce_access: "", inscrip: "", fecha_vencimiento: "", valor_cuota: "",
+    cliente: "", programa: "", correo: "", moneda: "COP", sistema_financiero: "SIST_F_NUEVO",
+  });
+  const [agregarInscripciones, setAgregarInscripciones] = useState<string[]>([]);
+  const [agregarEnCartera, setAgregarEnCartera] = useState<string[]>([]);
+  const [agregarBuscando, setAgregarBuscando]   = useState(false);
+  const [agregarGuardando, setAgregarGuardando] = useState(false);
+  const [agregarError, setAgregarError]         = useState("");
+  const [agregarMessage, setAgregarMessage]     = useState("");
+  const [cerrarDiaOpen, setCerrarDiaOpen]       = useState(false);
+  const [cerrandoDia, setCerrandoDia]           = useState(false);
+  const [cerrarDiaMessage, setCerrarDiaMessage] = useState("");
+  const [cerrarDiaError, setCerrarDiaError]     = useState("");
   const searchTimeout                   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef              = useRef<AbortController | null>(null);
   const tableContainerRef               = useRef<HTMLDivElement>(null);
@@ -437,7 +458,7 @@ export default function CarteraPreventivaView() {
   // El pipeline corre 1 vez al día; las acciones de confirmación de esta
   // vista (asociar pago, cerrar cartera, corregir valor cuota) deben poder
   // reprocesarse de inmediato en vez de esperar al cron (spec §6).
-  const { fireTrigger, reprocesoBadge } = useReproceso(() => fetchData(page));
+  const { fireTrigger, reprocesoBadge, marcaFila } = useReproceso(() => fetchData(page));
 
   const toggleAsociarPanel = async (row: CarteraPreventivaRow) => {
     const doc = row.cruce_access;
@@ -479,8 +500,8 @@ export default function CarteraPreventivaView() {
           .filter((p) => p.restante > 0.01);
         return { ...prev, [doc]: { ...current, pagos } };
       });
-      setAsociarMessage((prev) => ({ ...prev, [doc]: "Asociación guardada. Se aplicará en el próximo cruce." }));
-      fireTrigger();
+      setAsociarMessage((prev) => ({ ...prev, [doc]: "Asociación guardada. Se aplica al terminar el recálculo." }));
+      fireTrigger(inscripcion.llave);
     } catch (err) {
       setAsociarError((prev) => ({ ...prev, [doc]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
@@ -514,9 +535,9 @@ export default function CarteraPreventivaView() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al cerrar la cartera");
-      setRowMessage((prev) => ({ ...prev, [row.llave]: "Cierre guardado. Se reflejará en el próximo cruce." }));
+      setRowMessage((prev) => ({ ...prev, [row.llave]: "Cierre guardado. Se refleja al terminar el recálculo." }));
       setCierreOpen((prev) => ({ ...prev, [row.llave]: false }));
-      fireTrigger();
+      fireTrigger(row.llave);
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
@@ -538,8 +559,8 @@ export default function CarteraPreventivaView() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al reabrir");
-      setRowMessage((prev) => ({ ...prev, [row.llave]: "Reapertura guardada. Se reflejará en el próximo cruce." }));
-      fireTrigger();
+      setRowMessage((prev) => ({ ...prev, [row.llave]: "Reapertura guardada. Se refleja al terminar el recálculo." }));
+      fireTrigger(row.llave);
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
@@ -560,8 +581,8 @@ export default function CarteraPreventivaView() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al guardar el valor de cuota");
-      setRowMessage((prev) => ({ ...prev, [row.llave]: "Valor de cuota corregido. Se reflejará en el próximo cruce." }));
-      fireTrigger();
+      setRowMessage((prev) => ({ ...prev, [row.llave]: "Valor de cuota corregido. Se refleja al terminar el recálculo." }));
+      fireTrigger(row.llave);
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
@@ -586,8 +607,8 @@ export default function CarteraPreventivaView() {
         if (nuevoValor) next.add(row.llave); else next.delete(row.llave);
         return next;
       });
-      setRowMessage((prev) => ({ ...prev, [row.llave]: nuevoValor ? "Marcada como última cuota. Se reflejará en el próximo cruce." : "Desmarcada. Se reflejará en el próximo cruce." }));
-      fireTrigger();
+      setRowMessage((prev) => ({ ...prev, [row.llave]: nuevoValor ? "Marcada como última cuota. Se refleja al terminar el recálculo." : "Desmarcada. Se refleja al terminar el recálculo." }));
+      fireTrigger(row.llave);
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
@@ -613,8 +634,8 @@ export default function CarteraPreventivaView() {
       setSaldosFavor((prev) => prev
         .map((s) => s.id === saldo.id ? { ...s, disponible: s.disponible - monto } : s)
         .filter((s) => s.disponible > 0.01));
-      setRowMessage((prev) => ({ ...prev, [row.llave]: "Saldo asociado. Se aplicará en el próximo cruce." }));
-      fireTrigger();
+      setRowMessage((prev) => ({ ...prev, [row.llave]: "Saldo asociado. Se aplica al terminar el recálculo." }));
+      fireTrigger(row.llave);
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
@@ -662,13 +683,103 @@ export default function CarteraPreventivaView() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al descartar el pago");
       setDescartarData((prev) => ({ ...prev, [row.llave]: (prev[row.llave] || []).filter((a) => a.id !== asociacion.id) }));
-      setRowMessage((prev) => ({ ...prev, [row.llave]: "Pago descartado. La cuota vuelve a pendiente en el próximo cruce." }));
+      setRowMessage((prev) => ({ ...prev, [row.llave]: "Pago descartado. La cuota vuelve a pendiente al terminar el recálculo." }));
       fetchSaldosFavor();
-      fireTrigger();
+      fireTrigger(row.llave);
     } catch (err) {
       setDescartarError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
       setRowSaving(null);
+    }
+  };
+
+  // §1: al escribir el documento se buscan sus inscripciones — las que ya están en
+  // cartera (se hereda, caso 1) y las del Excel de inscripciones (caso 2, la
+  // inscripción todavía no está en cartera). De paso prellena los descriptivos.
+  const buscarInscripciones = async (documento: string) => {
+    const doc = documento.trim();
+    if (!doc) { setAgregarInscripciones([]); setAgregarEnCartera([]); return; }
+    setAgregarBuscando(true);
+    setAgregarError("");
+    try {
+      const res  = await fetch(`/api/cartera-preventiva/cuota?documento=${encodeURIComponent(doc)}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al buscar inscripciones");
+      setAgregarInscripciones(json.inscripciones || []);
+      setAgregarEnCartera(json.en_cartera || []);
+      setAgregarForm((prev) => ({
+        ...prev,
+        inscrip: (json.inscripciones || []).length === 1 ? json.inscripciones[0] : prev.inscrip,
+        cliente: prev.cliente || json.prefill?.cliente || "",
+        programa: prev.programa || json.prefill?.programa || "",
+        correo: prev.correo || json.prefill?.correo || "",
+        moneda: json.prefill?.moneda || prev.moneda,
+        sistema_financiero: json.prefill?.sistema_financiero || prev.sistema_financiero,
+      }));
+    } catch (err) {
+      setAgregarError(err instanceof Error ? err.message : "Error inesperado");
+    } finally {
+      setAgregarBuscando(false);
+    }
+  };
+
+  const handleAgregarCuota = async () => {
+    setAgregarGuardando(true);
+    setAgregarError("");
+    try {
+      const res  = await fetch("/api/cartera-preventiva/cuota", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...agregarForm, valor_cuota: Number(agregarForm.valor_cuota) }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al crear la cuota");
+      setAgregarMessage(`Cuota ${json.llave} creada. El pago de esa persona caerá solo en el próximo cruce.`);
+      setAgregarOpen(false);
+      setAgregarForm({
+        cruce_access: "", inscrip: "", fecha_vencimiento: "", valor_cuota: "",
+        cliente: "", programa: "", correo: "", moneda: "COP", sistema_financiero: "SIST_F_NUEVO",
+      });
+      setAgregarInscripciones([]);
+      setAgregarEnCartera([]);
+      fetchData(page);
+      fireTrigger();
+    } catch (err) {
+      setAgregarError(err instanceof Error ? err.message : "Error inesperado");
+    } finally {
+      setAgregarGuardando(false);
+    }
+  };
+
+  // §2.2: cierra en bloque las cuotas cruzadas hoy que coincidan con los filtros
+  // de la vista. No dispara reproceso: la escritura es inmediata y el pipeline la
+  // respeta (su chequeo de idempotencia compara valor_pago contra la suma de
+  // asociaciones, que no cambia al cerrar).
+  const handleCerrarDia = async () => {
+    setCerrandoDia(true);
+    setCerrarDiaError("");
+    setCerrarDiaMessage("");
+    try {
+      const res  = await fetch("/api/cartera-preventiva/cerrar-dia", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...Object.fromEntries(buildDownloadParams()),
+          dia: new Date().toLocaleDateString("en-CA"), // YYYY-MM-DD en la zona del usuario
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al cerrar la cartera del día");
+      const partes = [`Se cerraron ${json.cerradas} cuota(s) del día.`];
+      if (json.saltadas > 0) partes.push(`${json.saltadas} ya estaban cerradas o sin pago identificado.`);
+      if (json.errores?.length) partes.push(`Con errores: ${json.errores.join(" · ")}`);
+      setCerrarDiaMessage(partes.join(" "));
+      setCerrarDiaOpen(false);
+      fetchData(page);
+    } catch (err) {
+      setCerrarDiaError(err instanceof Error ? err.message : "Error inesperado");
+    } finally {
+      setCerrandoDia(false);
     }
   };
 
@@ -683,9 +794,25 @@ export default function CarteraPreventivaView() {
       const res  = await fetch("/api/cartera-preventiva/activar", { method: "POST" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al activar la cartera");
-      setActivarMessage("Cartera nueva activada. Actualizando la vista...");
+      setActivarMessage("Cambiando la versión de la cartera...");
+      // §3: esperar a que el swap termine de verdad antes de recargar. Sin esto el
+      // banner se quedaba pegado en "Actualizando la vista…" con datos de la versión
+      // anterior. El tope duro evita dejarlo colgado si el VPS deja de responder.
+      const inicio = Date.now();
+      let vistoCorriendo = false;
+      while (Date.now() - inicio < ACTIVAR_MAX_MS) {
+        await new Promise((r) => setTimeout(r, ACTIVAR_POLL_MS));
+        const st = await fetch("/api/cartera-preventiva/activar/status").then((r) => r.json()).catch(() => null);
+        if (!st) break;
+        if (st.status === "running") { vistoCorriendo = true; continue; }
+        if (vistoCorriendo || Date.now() - inicio > ACTIVAR_GRACE_MS) break;
+      }
+      setActivarMessage("Cartera nueva activada.");
       await fetchStagingStatus();
+      setPage(1);
       fetchData(1);
+      // El cruce hay que rehacerlo sobre la cartera nueva: era uno de los 3 huecos (§3).
+      fireTrigger();
     } catch (err) {
       setActivarError(err instanceof Error ? err.message : "Error inesperado");
     } finally {
@@ -698,7 +825,237 @@ export default function CarteraPreventivaView() {
       {reprocesoBadge}
       <div className={`${PANEL} animate-slide-down px-6 py-4 flex items-center justify-between flex-wrap gap-3`}>
         <h1 className="text-lg font-semibold text-gray-900">Cartera Preventiva</h1>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => setAgregarOpen(true)}
+            className="flex items-center gap-1.5 border border-black/10 text-brand-700 text-sm px-3.5 py-1.5 rounded-full hover:bg-brand-50 active:scale-95 transition-all duration-200 ease-(--ease-spring)"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            Agregar cuota
+          </button>
+          <button
+            onClick={() => { setCerrarDiaOpen(true); setCerrarDiaMessage(""); setCerrarDiaError(""); }}
+            disabled={cerrandoDia}
+            title="Pasa valor_pago a pago en las cuotas cruzadas hoy que coincidan con los filtros de la vista"
+            className="flex items-center gap-1.5 bg-slate-700 text-white text-sm px-3.5 py-1.5 rounded-full shadow-sm hover:bg-slate-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+            {cerrandoDia ? "Cerrando..." : "Cerrar Cartera"}
+          </button>
+        </div>
       </div>
+
+      {(cerrarDiaMessage || cerrarDiaError) && (
+        <div className={`text-sm rounded-xl px-3.5 py-2 border ${cerrarDiaError ? "text-red-600 bg-red-50 border-red-200/80" : "text-green-700 bg-green-50 border-green-200/80"}`}>
+          {cerrarDiaError || cerrarDiaMessage}
+        </div>
+      )}
+
+      {/* §2.2: confirmación obligatoria, sin deshacer. */}
+      {cerrarDiaOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4" onClick={() => !cerrandoDia && setCerrarDiaOpen(false)}>
+          <div className={`${PANEL} animate-pop-in max-w-md w-full p-6 space-y-3`} onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-base font-semibold text-gray-900">¿Estás seguro de cerrar la cartera del día?</h2>
+            <p className="text-sm text-gray-600">
+              Se marcarán como cobradas las cuotas cruzadas hoy que coincidan con los filtros
+              puestos en la vista: el valor identificado pasa a la columna <span className="font-medium">Pago</span> y
+              lo que falte queda a la vista en <span className="font-medium">Valor a Cobrar</span>.
+            </p>
+            <p className="text-xs text-gray-500">
+              No se puede deshacer desde esta pantalla. Las cuotas ya cerradas y las que no tienen
+              pago identificado se saltan solas, así que darle dos veces no hace daño.
+            </p>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                onClick={() => setCerrarDiaOpen(false)}
+                disabled={cerrandoDia}
+                className="text-sm px-3.5 py-1.5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleCerrarDia}
+                disabled={cerrandoDia}
+                className="text-sm px-3.5 py-1.5 rounded-full bg-slate-700 text-white hover:bg-slate-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+              >
+                {cerrandoDia ? "Cerrando..." : "Confirmar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {agregarMessage && (
+        <div className="text-sm text-green-700 bg-green-50 border border-green-200/80 rounded-xl px-3.5 py-2">
+          {agregarMessage}
+        </div>
+      )}
+
+      {/* §1: crear a mano una cuota que no vino en el Excel. */}
+      {agregarOpen && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 py-10 overflow-y-auto" onClick={() => !agregarGuardando && setAgregarOpen(false)}>
+          <div className={`${PANEL} animate-pop-in max-w-lg w-full p-6 space-y-3`} onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-base font-semibold text-gray-900">Agregar cuota</h2>
+            <p className="text-xs text-gray-500">
+              Para cuotas que deberían estar en la cartera y no vinieron en el Excel. El pago de esa
+              persona no se pierde: en cuanto exista la cuota, el próximo cruce lo aplica solo.
+            </p>
+
+            <div className="space-y-2.5">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Documento *</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={agregarForm.cruce_access}
+                    onChange={(e) => setAgregarForm((p) => ({ ...p, cruce_access: e.target.value }))}
+                    onBlur={(e) => buscarInscripciones(e.target.value)}
+                    placeholder="Documento del deudor"
+                    className={`flex-1 ${INPUT}`}
+                  />
+                  <button
+                    onClick={() => buscarInscripciones(agregarForm.cruce_access)}
+                    disabled={agregarBuscando || !agregarForm.cruce_access.trim()}
+                    className="text-sm px-3 py-1.5 rounded-xl border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 whitespace-nowrap"
+                  >
+                    {agregarBuscando ? "Buscando..." : "Buscar"}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Inscripción (INCP) *</label>
+                {agregarInscripciones.length > 0 ? (
+                  <select
+                    value={agregarForm.inscrip}
+                    onChange={(e) => setAgregarForm((p) => ({ ...p, inscrip: e.target.value }))}
+                    className={`w-full ${INPUT}`}
+                  >
+                    <option value="" className="text-gray-900">Elige una inscripción...</option>
+                    {agregarInscripciones.map((i) => (
+                      <option key={i} value={i} className="text-gray-900">
+                        {i}{agregarEnCartera.includes(i) ? " — ya está en cartera" : " — solo en el Excel de inscripciones"}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={agregarForm.inscrip}
+                    onChange={(e) => setAgregarForm((p) => ({ ...p, inscrip: e.target.value }))}
+                    placeholder="Busca el documento para elegir, o escríbela"
+                    className={`w-full ${INPUT}`}
+                  />
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Fecha de vencimiento *</label>
+                  <input
+                    type="date"
+                    value={agregarForm.fecha_vencimiento}
+                    onChange={(e) => setAgregarForm((p) => ({ ...p, fecha_vencimiento: e.target.value }))}
+                    className={`w-full ${INPUT}`}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Valor de la cuota *</label>
+                  <input
+                    type="number"
+                    value={agregarForm.valor_cuota}
+                    onChange={(e) => setAgregarForm((p) => ({ ...p, valor_cuota: e.target.value }))}
+                    className={`w-full ${INPUT}`}
+                  />
+                </div>
+              </div>
+
+              {agregarForm.fecha_vencimiento && (
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200/80 rounded-lg px-2 py-1.5">
+                  La fecha de vencimiento define el orden de cobro: una fecha vieja hace que esta
+                  cuota se cobre <span className="font-medium">antes</span> que las que ya estaban pendientes.
+                </p>
+              )}
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Cliente</label>
+                  <input type="text" value={agregarForm.cliente}
+                    onChange={(e) => setAgregarForm((p) => ({ ...p, cliente: e.target.value }))}
+                    className={`w-full ${INPUT}`} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Programa</label>
+                  <input type="text" value={agregarForm.programa}
+                    onChange={(e) => setAgregarForm((p) => ({ ...p, programa: e.target.value }))}
+                    className={`w-full ${INPUT}`} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Correo</label>
+                  <input type="text" value={agregarForm.correo}
+                    onChange={(e) => setAgregarForm((p) => ({ ...p, correo: e.target.value }))}
+                    className={`w-full ${INPUT}`} />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Moneda</label>
+                    <input type="text" value={agregarForm.moneda}
+                      onChange={(e) => setAgregarForm((p) => ({ ...p, moneda: e.target.value }))}
+                      className={`w-full ${INPUT}`} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Sist. Fin.</label>
+                    <input type="text" value={agregarForm.sistema_financiero}
+                      onChange={(e) => setAgregarForm((p) => ({ ...p, sistema_financiero: e.target.value }))}
+                      className={`w-full ${INPUT}`} />
+                  </div>
+                </div>
+              </div>
+
+              {agregarInscripciones.length > 1 && (
+                <p className="text-[11px] text-gray-500">
+                  Ojo: si esta persona queda con dos inscripciones debiendo, el sistema deja de
+                  aplicarle los pagos automáticamente y pasan a asociación manual. Es a propósito,
+                  para que la plata no caiga en la inscripción equivocada.
+                </p>
+              )}
+              <p className="text-[11px] text-gray-400">
+                Al hacer &quot;Cargar Cartera&quot; esta cuota no se recrea: se archiva con la versión, como
+                cualquier otra. Si sigue faltando, se vuelve a crear.
+              </p>
+            </div>
+
+            {agregarError && <p className="text-xs text-red-600">{agregarError}</p>}
+
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                onClick={() => setAgregarOpen(false)}
+                disabled={agregarGuardando}
+                className="text-sm px-3.5 py-1.5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleAgregarCuota}
+                disabled={
+                  agregarGuardando ||
+                  !agregarForm.cruce_access.trim() ||
+                  !agregarForm.inscrip.trim() ||
+                  !agregarForm.fecha_vencimiento ||
+                  !(Number(agregarForm.valor_cuota) > 0)
+                }
+                className="text-sm px-3.5 py-1.5 rounded-full bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+              >
+                {agregarGuardando ? "Creando..." : "Crear cuota"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {stagingCount > 0 && (
         <div className="animate-slide-down bg-amber-50 border border-amber-200/80 rounded-2xl px-6 py-3.5 flex items-center justify-between flex-wrap gap-3">
@@ -1005,7 +1362,7 @@ export default function CarteraPreventivaView() {
                             disabled={saving}
                             className="text-xs px-2 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
                           >
-                            {cierreOpen[row.llave] ? "Ocultar cierre" : "Cerrar cartera"}
+                            {cierreOpen[row.llave] ? "Ocultar cierre" : "Cerrar Cuota"}
                           </button>
                         )}
                         {!pendiente && row.notificacion === "CARTERA" && (
@@ -1205,6 +1562,7 @@ export default function CarteraPreventivaView() {
                             )}
                           </div>
                         )}
+                        {marcaFila(row.llave)}
                         {rowMessage[row.llave] && <span className="text-[11px] text-green-700">{rowMessage[row.llave]}</span>}
                         {rowError[row.llave] && <span className="text-[11px] text-red-600">{rowError[row.llave]}</span>}
                         {!pendiente && !necesitaUltimaCuota(row) && !cierreOpen[row.llave] && !puedeDescartar && !puedeAsociarSaldo && !rowMessage[row.llave] && (
