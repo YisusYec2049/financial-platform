@@ -391,6 +391,13 @@ export default function CarteraPreventivaView() {
   // Diferencia (§4.9): pasa a poder ser positiva (saldo a favor, pagó de más)
   // con la Fase 8 de matching-test. Antes solo era negativa (debe) o 0 (exacto).
   const paymentBadge = (row: CarteraPreventivaRow) => {
+    // La cuota original de un pago parcial con faltante >= $50.000 lleva la
+    // marca 'FALTA DE PAGO' (el faltante vive en `diferencia`, negativo). Su
+    // estado real NO es "Pagada completa" ni "Saldo:" — es que le faltó el pago.
+    // Va primero, para que gane sobre el chequeo de `diferencia < 0`.
+    if (row.notificacion === "FALTA DE PAGO") {
+      return <span className="bg-red-50 text-red-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">FALTA DE PAGO</span>;
+    }
     if (!row.fecha_pago) {
       return <span className="bg-gray-100 text-gray-500 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">Sin pago identificado</span>;
     }
@@ -428,10 +435,13 @@ export default function CarteraPreventivaView() {
         </span>
       );
     }
-    // Regla #5 (Spec Auto Cartera): cuota nueva generada cuando un pago dejó
-    // un faltante >= $50k tras cerrar lo que sí alcanzó a cubrir.
+    // 'FALTA DE PAGO' ahora se muestra en el ESTADO de la cuota original
+    // (`paymentBadge`), no en esta columna — la marca pasó de la cuota nueva
+    // (la deuda) a la original, que es a la que le faltó el pago. La cuota
+    // nueva viene con notificacion=NULL, así que aquí no debe aparecer.
+    // `return null` explícito para que no caiga al texto plano de abajo.
     if (row.notificacion === "FALTA DE PAGO") {
-      return <span className="bg-red-50 text-red-700 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">FALTA DE PAGO</span>;
+      return null;
     }
     // Regla #8: cierre manual ya aplicado por el pipeline (valor_pago =
     // valor_a_cobrar, medio_pago = 'Cartera').

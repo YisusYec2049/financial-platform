@@ -55,7 +55,10 @@ export async function GET(req: NextRequest) {
     if (payTo)        query = query.lte("fecha_pago", payTo);
     if (cruceFrom)    query = query.gte("fecha_cruce", cruceFrom);
     if (cruceTo)      query = query.lte("fecha_cruce", cruceTo);
-    if (conNotificacion) query = query.not("notificacion", "is", null).neq("notificacion", "");
+    // "Con notificación de pago de más": excluye 'FALTA DE PAGO', que es lo
+    // contrario (la cuota original de un pago parcial con faltante >= $50k lleva
+    // esa marca) y colaría aquí por ser una notificacion no nula.
+    if (conNotificacion) query = query.not("notificacion", "is", null).neq("notificacion", "").neq("notificacion", "FALTA DE PAGO");
 
     if (wompiTipo === "automatico") query = query.eq("es_wompi_automatico", true);
     else if (wompiTipo === "manual") query = query.eq("es_wompi_automatico", false);
