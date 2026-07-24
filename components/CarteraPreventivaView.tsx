@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { useSessionState } from "@/lib/useSessionState";
 import { useReproceso } from "@/lib/useReproceso";
+import { parseMonto, formatMonto } from "@/lib/monto";
 
 type CarteraPreventivaRow = {
   id: number;
@@ -521,7 +522,7 @@ export default function CarteraPreventivaView() {
     setRowSaving(row.llave);
     setRowError((prev) => ({ ...prev, [row.llave]: "" }));
     try {
-      const valorCuota = Number(cuotaEdits[row.llave] ?? row.valor_cuota);
+      const valorCuota = parseMonto(cuotaEdits[row.llave] ?? row.valor_cuota);
       const res  = await fetch("/api/cartera-preventiva/overrides", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -569,7 +570,7 @@ export default function CarteraPreventivaView() {
   };
 
   const handleSaveValorCuota = async (row: CarteraPreventivaRow) => {
-    const nuevo = Number(cuotaEdits[row.llave]);
+    const nuevo = parseMonto(cuotaEdits[row.llave]);
     if (!Number.isFinite(nuevo) || nuevo === row.valor_cuota) return;
     setRowSaving(row.llave);
     setRowError((prev) => ({ ...prev, [row.llave]: "" }));
@@ -730,11 +731,11 @@ export default function CarteraPreventivaView() {
       const res  = await fetch("/api/cartera-preventiva/cuota", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...agregarForm, valor_cuota: Number(agregarForm.valor_cuota) }),
+        body: JSON.stringify({ ...agregarForm, valor_cuota: parseMonto(agregarForm.valor_cuota) }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al crear la cuota");
-      setAgregarMessage(`Cuota ${json.llave} creada. El pago de esa persona caerá solo en el próximo cruce.`);
+      setAgregarMessage(`Cuota ${json.llave} creada. Reprocesando el cruce…`);
       setAgregarOpen(false);
       setAgregarForm({
         cruce_access: "", inscrip: "", fecha_vencimiento: "", valor_cuota: "",
@@ -902,7 +903,7 @@ export default function CarteraPreventivaView() {
             <h2 className="text-base font-semibold text-gray-900">Agregar cuota</h2>
             <p className="text-xs text-gray-500">
               Para cuotas que deberían estar en la cartera y no vinieron en el Excel. El pago de esa
-              persona no se pierde: en cuanto exista la cuota, el próximo cruce lo aplica solo.
+              persona no se pierde: en cuanto exista la cuota, el reproceso lo aplica en cuanto termina.
             </p>
 
             <div className="space-y-2.5">
@@ -966,9 +967,11 @@ export default function CarteraPreventivaView() {
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">Valor de la cuota *</label>
                   <input
-                    type="number"
+                    type="text"
+                    inputMode="numeric"
                     value={agregarForm.valor_cuota}
                     onChange={(e) => setAgregarForm((p) => ({ ...p, valor_cuota: e.target.value }))}
+                    onBlur={(e) => setAgregarForm((p) => ({ ...p, valor_cuota: formatMonto(e.target.value) }))}
                     className={`w-full ${INPUT}`}
                   />
                 </div>
@@ -1046,7 +1049,7 @@ export default function CarteraPreventivaView() {
                   !agregarForm.cruce_access.trim() ||
                   !agregarForm.inscrip.trim() ||
                   !agregarForm.fecha_vencimiento ||
-                  !(Number(agregarForm.valor_cuota) > 0)
+                  !(parseMonto(agregarForm.valor_cuota) > 0)
                 }
                 className="text-sm px-3.5 py-1.5 rounded-full bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
               >
@@ -1273,8 +1276,8 @@ export default function CarteraPreventivaView() {
                   const saldoFavor = isSaldoFavor(row);
                   const pendiente = !row.fecha_pago;
                   const saving = rowSaving === row.llave;
-                  const cuotaValue = cuotaEdits[row.llave] ?? String(row.valor_cuota);
-                  const cuotaChanged = cuotaValue.trim() !== "" && Number(cuotaValue) !== row.valor_cuota && !Number.isNaN(Number(cuotaValue));
+                  const cuotaValue = cuotaEdits[row.llave] ?? formatMonto(row.valor_cuota);
+                  const cuotaChanged = cuotaValue.trim() !== "" && parseMonto(cuotaValue) !== row.valor_cuota && !Number.isNaN(parseMonto(cuotaValue));
                   const puedeAsociar = multiInscripcionDocs.has(row.cruce_access);
                   // Regla #4/#7: mensaje + botón de asociar saldo a favor —
                   // no en la cuota que originó el saldo (esa ya muestra su
@@ -1301,9 +1304,11 @@ export default function CarteraPreventivaView() {
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-1">
                         <input
-                          type="number"
+                          type="text"
+                          inputMode="numeric"
                           value={cuotaValue}
                           onChange={(e) => setCuotaEdits((prev) => ({ ...prev, [row.llave]: e.target.value }))}
+                          onBlur={(e) => setCuotaEdits((prev) => ({ ...prev, [row.llave]: formatMonto(e.target.value) }))}
                           disabled={saving}
                           className="w-24 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
                         />
@@ -1384,7 +1389,7 @@ export default function CarteraPreventivaView() {
                               onChange={(e) => setCierreFecha((prev) => ({ ...prev, [row.llave]: e.target.value }))}
                               className="w-full border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50"
                             />
-                            <p className="text-[11px] text-gray-400">Medio: Cartera · Valor: {fmtMonto(Number(cuotaEdits[row.llave] ?? row.valor_cuota))}</p>
+                            <p className="text-[11px] text-gray-400">Medio: Cartera · Valor: {fmtMonto(parseMonto(cuotaEdits[row.llave] ?? row.valor_cuota))}</p>
                             <button
                               onClick={() => handleCerrarCartera(row)}
                               disabled={saving}
@@ -1439,15 +1444,17 @@ export default function CarteraPreventivaView() {
                                               Todo
                                             </button>
                                             <input
-                                              type="number"
+                                              type="text"
+                                              inputMode="numeric"
                                               placeholder="otro $"
                                               value={montoOtroValor[otroValorKey] || ""}
                                               onChange={(e) => setMontoOtroValor((prev) => ({ ...prev, [otroValorKey]: e.target.value }))}
-                                              className="w-14 border border-gray-300 rounded px-1 py-0.5"
+                                              onBlur={(e) => setMontoOtroValor((prev) => ({ ...prev, [otroValorKey]: formatMonto(e.target.value) }))}
+                                              className="w-24 border border-gray-300 rounded px-1 py-0.5"
                                             />
                                             <button
                                               onClick={() => {
-                                                const monto = Number(montoOtroValor[otroValorKey]);
+                                                const monto = parseMonto(montoOtroValor[otroValorKey]);
                                                 if (Number.isFinite(monto) && monto > 0) handleAsociar(row.cruce_access, pago, ins, monto);
                                               }}
                                               disabled={savingAction}
@@ -1500,15 +1507,17 @@ export default function CarteraPreventivaView() {
                                           {cuotaRestante && cuotaRestante < saldo.disponible ? "Todo lo que falta" : "Todo"}
                                         </button>
                                         <input
-                                          type="number"
+                                          type="text"
+                                          inputMode="numeric"
                                           placeholder="otro $"
                                           value={saldoOtroValor[otroKey] || ""}
                                           onChange={(e) => setSaldoOtroValor((prev) => ({ ...prev, [otroKey]: e.target.value }))}
-                                          className="w-16 border border-gray-300 rounded px-1 py-0.5"
+                                          onBlur={(e) => setSaldoOtroValor((prev) => ({ ...prev, [otroKey]: formatMonto(e.target.value) }))}
+                                          className="w-24 border border-gray-300 rounded px-1 py-0.5"
                                         />
                                         <button
                                           onClick={() => {
-                                            const monto = Number(saldoOtroValor[otroKey]);
+                                            const monto = parseMonto(saldoOtroValor[otroKey]);
                                             if (Number.isFinite(monto) && monto > 0) handleAsociarSaldo(row, saldo, monto);
                                           }}
                                           disabled={savingAction}
