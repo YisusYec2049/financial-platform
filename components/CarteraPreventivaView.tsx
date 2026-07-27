@@ -29,6 +29,10 @@ type CarteraPreventivaRow = {
   fecha_pago: string | null;
   medio_pago: string | null;
   valor_pago: number | null;
+  // Solo se llena cuando una persona cierra la cuota (botón "Cerrar Cuota" o
+  // "Cerrar Cartera"): distingue una cuota cerrada de una que solo trae un
+  // abono del Excel. Es la definición del filtro "Cerradas".
+  pago_confirmado: number | null;
   diferencia: number | null;
   fecha_cruce: string | null;
   notificacion: string | null;
@@ -524,6 +528,40 @@ export default function CarteraPreventivaView() {
     setCierreOpen((prev) => ({ ...prev, [row.llave]: !prev[row.llave] }));
     if (!cierreFecha[row.llave]) {
       setCierreFecha((prev) => ({ ...prev, [row.llave]: new Date().toISOString().slice(0, 10) }));
+    }
+  };
+
+  // `cartera_preventiva.pago` es text en el esquema real y puede traer decimales
+  // del Excel ("485086.5"). Nada que ver con parseMonto (entrada del usuario).
+  const numPago = (v: string | null): number => {
+    const n = parseFloat(v ?? "");
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  // Cierre normal de una cuota CON pago identificado: copia valor_pago → pago
+  // (misma escritura que "Cerrar Cartera" en bloque, pero para esta llave).
+  // Escritura directa e inmediata, así que NO dispara reproceso — el pipeline
+  // la respeta por idempotencia.
+  const handleCerrarCuota = async (row: CarteraPreventivaRow) => {
+    setRowSaving(row.llave);
+    setRowError((prev) => ({ ...prev, [row.llave]: "" }));
+    try {
+      const res  = await fetch("/api/cartera-preventiva/cerrar-cuota", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ llave: row.llave }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al cerrar la cuota");
+      setRowMessage((prev) => ({
+        ...prev,
+        [row.llave]: json.mensaje || (json.yaCerrada ? "La cuota ya estaba cerrada." : "Cuota cerrada."),
+      }));
+      fetchData(page);
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setRowSaving(null);
     }
   };
 
@@ -1112,6 +1150,7 @@ export default function CarteraPreventivaView() {
             <option value="todas" className="text-gray-900">Todas</option>
             <option value="pendiente" className="text-gray-900">Pendiente</option>
             <option value="resuelta" className="text-gray-900">Resuelta</option>
+            <option value="cerrada" className="text-gray-900">Cerradas</option>
           </select>
           <select
             value={medioPago}
@@ -1285,6 +1324,18 @@ export default function CarteraPreventivaView() {
                   const parcial = isPagoParcial(row);
                   const saldoFavor = isSaldoFavor(row);
                   const pendiente = !row.fecha_pago;
+                  // Cerrada = alguien la cerró y `pago` ya refleja el valor_pago
+                  // (si el pago cambió después, vuelve a ofrecerse el cierre).
+                  const cerrada = row.pago_confirmado != null && row.pago_confirmado === row.valor_pago;
+                  // El Excel ya trae el pago en `pago` (mismo número, o centavos
+                  // de diferencia): la cuota ya está cobrada en el Sistema
+                  // Financiero, así que no hay nada que cerrar — y cerrarla
+                  // duplicaría el pago, porque la fórmula acumula.
+                  // Ojo: `pago` es text en la base y puede traer decimales
+                  // ("485086.5"), así que va parseFloat — NO parseMonto, que
+                  // está hecho para la entrada del usuario ("." = miles).
+                  const yaCobrada = !cerrada && row.valor_pago != null
+                    && Math.abs(numPago(row.pago) - row.valor_pago) <= 100;
                   const saving = rowSaving === row.llave;
                   const cuotaValue = cuotaEdits[row.llave] ?? formatMonto(row.valor_cuota);
                   const cuotaChanged = cuotaValue.trim() !== "" && parseMonto(cuotaValue) !== row.valor_cuota && !Number.isNaN(parseMonto(cuotaValue));
@@ -1371,13 +1422,39 @@ export default function CarteraPreventivaView() {
                             {ultimaCuotaLlaves.has(row.llave) ? "✓ Última cuota" : "Es la última cuota"}
                           </button>
                         )}
-                        {pendiente && (
+                        {/* Cuota CON pago identificado → cierre normal directo:
+                            no hay nada que capturar, el pago ya se conoce. */}
+                        {row.valor_pago != null && !cerrada && !yaCobrada && (
+                          <button
+                            onClick={() => handleCerrarCuota(row)}
+                            disabled={saving}
+                            title="Pasa el valor pagado al campo Pago — la cuota queda cerrada"
+                            className="text-xs px-2 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                          >
+                            {saving ? "Cerrando..." : "Cerrar Cuota"}
+                          </button>
+                        )}
+                        {cerrada && (
+                          <span className="text-[11px] text-gray-400 whitespace-nowrap">Cuota cerrada</span>
+                        )}
+                        {yaCobrada && (
+                          <span
+                            title="El Sistema Financiero ya la registra cobrada (Pago = Valor pagado) — no hay nada que cerrar"
+                            className="text-[11px] text-gray-400 whitespace-nowrap"
+                          >
+                            Ya cobrada
+                          </span>
+                        )}
+                        {/* Cuota SIN pago identificado → cierre manual "Cartera":
+                            la persona declara que se pagó por cartera. */}
+                        {pendiente && row.valor_pago == null && (
                           <button
                             onClick={() => toggleCierrePanel(row)}
                             disabled={saving}
+                            title="La cuota no tiene pago identificado — declararla pagada por cartera"
                             className="text-xs px-2 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
                           >
-                            {cierreOpen[row.llave] ? "Ocultar cierre" : "Cerrar Cuota"}
+                            {cierreOpen[row.llave] ? "Ocultar cierre" : "Marcar pagada por Cartera"}
                           </button>
                         )}
                         {!pendiente && row.notificacion === "CARTERA" && (

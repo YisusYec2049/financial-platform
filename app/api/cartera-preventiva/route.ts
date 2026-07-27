@@ -35,6 +35,10 @@ export async function GET(req: NextRequest) {
 
   if (estado === "resuelta") query = query.not("fecha_pago", "is", null);
   else if (estado === "pendiente") query = query.is("fecha_pago", null);
+  // "Cerradas": pago_confirmado solo lo llena una persona al cerrar la cuota
+  // ("Cerrar Cuota" por fila o "Cerrar Cartera" en bloque), así que distingue
+  // una cuota cerrada de una que solo trae un abono del Excel.
+  else if (estado === "cerrada") query = query.not("pago_confirmado", "is", null);
 
   if (vencFrom) query = query.gte("fecha_vencimiento", vencFrom);
   if (vencTo)   query = query.lte("fecha_vencimiento", vencTo);
