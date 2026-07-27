@@ -76,6 +76,36 @@ export function useReproceso(onDone?: () => void) {
     }, POLL_MS);
   }, [stopPolling, finish]);
 
+  /**
+   * Re-enganche al montar: si YA hay un reproceso en curso (se disparó, el usuario navegó a otra
+   * vista y volvió), esta vista retoma el seguimiento aunque no haya sido ella la que lo disparó.
+   * El estado vive en el servidor (un solo carril), así que basta con preguntar el status.
+   *
+   * Sin esto, el `useEffect(() => stopPolling)` de arriba corta el polling al desmontar: la corrida
+   * sigue en el servidor pero la UI deja de seguirla, y al volver solo se hace el `fetchData` de
+   * montaje — si el pipeline todavía no terminó se ve el dato viejo y nada lo actualiza después,
+   * así que el cambio "parece" no aplicado.
+   *
+   * Si al montar ya terminó, no se engancha y no hace falta: el `fetchData` inicial ya trae el dato
+   * nuevo. Las píldoras "Recalculando…" por fila NO se restauran (esa info era local y se perdió al
+   * desmontar) — vuelve solo el badge global y el auto-refresco.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/cruce/reproceso/status")
+      .then((res) => res.json())
+      .then((json) => {
+        if (cancelled || json?.status !== "running") return;
+        setReprocesando(true);
+        startPolling();
+        // `startPolling` resetea `seenRunRef`, pero acabamos de ver la corrida en vivo: marcarla
+        // evita que el primer poll caiga en la ventana de gracia y dé la corrida por terminada.
+        seenRunRef.current = true;
+      })
+      .catch(() => { /* sin status no hay nada que retomar */ });
+    return () => { cancelled = true; };
+  }, [startPolling]);
+
   /** `clave` identifica la fila tocada (llave, matching_key, documento…) para marcarla. */
   const fireTrigger = useCallback((clave?: string) => {
     setReprocesando(true);
