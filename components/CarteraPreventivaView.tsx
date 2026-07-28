@@ -473,25 +473,36 @@ export default function CarteraPreventivaView() {
   // El pipeline corre 1 vez al día; las acciones de confirmación de esta
   // vista (asociar pago, cerrar cartera, corregir valor cuota) deben poder
   // reprocesarse de inmediato en vez de esperar al cron (spec §6).
-  const { fireTrigger, reprocesoBadge, marcaFila } = useReproceso(() => fetchData(page));
+  // Al terminar el recálculo hay que refrescar también el ledger: los saldos
+  // los recalcula el pipeline, así que quedarse con la resta local de
+  // handleAsociarSaldo dejaría el panel mostrando un número que ya no es.
+  const { fireTrigger, reprocesoBadge, marcaFila } = useReproceso(() => { fetchData(page); fetchSaldosFavor(); });
+
+  // Recarga los candidatos del panel desde el servidor. Se usa al abrirlo y
+  // después de asociar: el decremento local del "restante" da feedback
+  // inmediato, pero el valor_a_cobrar de las inscripciones solo se recalcula
+  // releyendo — si no, el panel sigue mostrando lo que faltaba antes.
+  const fetchAsociarData = useCallback(async (doc: string) => {
+    setAsociarLoading((prev) => ({ ...prev, [doc]: true }));
+    setAsociarError((prev) => ({ ...prev, [doc]: "" }));
+    try {
+      const res  = await fetch(`/api/cartera-preventiva/asociar?documento=${encodeURIComponent(doc)}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al cargar candidatos");
+      setAsociarData((prev) => ({ ...prev, [doc]: { inscripciones: json.inscripciones || [], pagos: json.pagos || [] } }));
+    } catch (err) {
+      setAsociarError((prev) => ({ ...prev, [doc]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setAsociarLoading((prev) => ({ ...prev, [doc]: false }));
+    }
+  }, []);
 
   const toggleAsociarPanel = async (row: CarteraPreventivaRow) => {
     const doc = row.cruce_access;
     const willOpen = !asociarOpen[doc];
     setAsociarOpen((prev) => ({ ...prev, [doc]: willOpen }));
     if (willOpen && !asociarData[doc]) {
-      setAsociarLoading((prev) => ({ ...prev, [doc]: true }));
-      setAsociarError((prev) => ({ ...prev, [doc]: "" }));
-      try {
-        const res  = await fetch(`/api/cartera-preventiva/asociar?documento=${encodeURIComponent(doc)}`);
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "Error al cargar candidatos");
-        setAsociarData((prev) => ({ ...prev, [doc]: { inscripciones: json.inscripciones || [], pagos: json.pagos || [] } }));
-      } catch (err) {
-        setAsociarError((prev) => ({ ...prev, [doc]: err instanceof Error ? err.message : "Error inesperado" }));
-      } finally {
-        setAsociarLoading((prev) => ({ ...prev, [doc]: false }));
-      }
+      await fetchAsociarData(doc);
     }
   };
 
@@ -516,6 +527,7 @@ export default function CarteraPreventivaView() {
         return { ...prev, [doc]: { ...current, pagos } };
       });
       setAsociarMessage((prev) => ({ ...prev, [doc]: "Asociación guardada. Se aplica al terminar el recálculo." }));
+      fetchAsociarData(doc);
       fireTrigger(inscripcion.llave);
     } catch (err) {
       setAsociarError((prev) => ({ ...prev, [doc]: err instanceof Error ? err.message : "Error inesperado" }));
@@ -684,6 +696,7 @@ export default function CarteraPreventivaView() {
         .map((s) => s.id === saldo.id ? { ...s, disponible: s.disponible - monto } : s)
         .filter((s) => s.disponible > 0.01));
       setRowMessage((prev) => ({ ...prev, [row.llave]: "Saldo asociado. Se aplica al terminar el recálculo." }));
+      fetchSaldosFavor();
       fireTrigger(row.llave);
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
