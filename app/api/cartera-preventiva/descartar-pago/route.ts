@@ -42,28 +42,31 @@ export async function POST(req: NextRequest) {
 
   const monto = Number(asociacion.monto);
 
-  const { error: deleteError } = await supabase
-    .from("pago_asociaciones")
-    .delete()
-    .eq("id", asociacionId);
-  if (deleteError) return NextResponse.json({ error: deleteError.message }, { status: 500 });
+  // Registrar la plata y soltar el vínculo son UNA SOLA transacción (sql/025).
+  // Antes eran dos escrituras sueltas y en el orden inverso: si la cuota ya
+  // tenía un saldo de ese mismo pago (el sobrante que dejó el pipeline), el
+  // insert chocaba contra `unique (matching_key, llave_origen)` y devolvía 500
+  // con el vínculo ya borrado — la plata se perdía sin dejar rastro. La función
+  // registra primero (sumando al saldo existente si lo hay) y borra después.
+  const { error: rpcError } = await supabase.rpc("descartar_pago", {
+    p_asociacion_id: asociacionId,
+    p_documento: documento,
+    p_correo: correo,
+    p_cliente: cliente,
+    p_inscrip: inscrip,
+  });
 
-  const { error: insertError } = await supabase
-    .from("cartera_saldos_favor")
-    .insert({
-      origen: "descarte",
-      matching_key: matchingKey,
-      llave_origen: llave,
-      documento,
-      correo,
-      cliente,
-      inscrip,
-      monto,
-      disponible: monto,
-      fecha: new Date().toISOString().slice(0, 10),
-      aplicado: false,
+  if (rpcError) {
+    // La transacción se deshizo entera: no se borró nada. Se loguea el fallo
+    // para que "sin entrada en la bitácora" signifique de verdad "no pasó nada".
+    logAudit({
+      user_email: user.email ?? "unknown",
+      action: "delete",
+      filters: { asociacion_id: asociacionId, matching_key: matchingKey, llave, error: rpcError.message, view: "pago_asociaciones+cartera_saldos_favor" },
+      result_count: 0,
     });
-  if (insertError) return NextResponse.json({ error: insertError.message }, { status: 500 });
+    return NextResponse.json({ error: rpcError.message }, { status: 500 });
+  }
 
   logAudit({
     user_email: user.email ?? "unknown",
