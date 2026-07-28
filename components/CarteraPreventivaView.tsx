@@ -6,6 +6,123 @@ import { useSessionState } from "@/lib/useSessionState";
 import { useReproceso } from "@/lib/useReproceso";
 import { parseMonto, formatMonto } from "@/lib/monto";
 
+// Baja los Excel de Drive y corre la cadena completa (sync_cartera.py →
+// cruzar.py → cruzar_cartera_preventiva.py) vía /api/cruce/trigger, el mismo
+// proxy que ya usaba "Actualizar cruce". Vive acá, junto al banner de staging,
+// porque es donde se ve el resultado: si el Excel traía cartera nueva, queda en
+// staging esperando a "Cargar Cartera" (este botón NO activa nada).
+function BuscarArchivosButton({ onDone }: { onDone: () => Promise<number | null> }) {
+  const [running, setRunning] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError]     = useState("");
+  const pollRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+  const antesRef = useRef<number | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+  }, []);
+
+  useEffect(() => stopPolling, [stopPolling]);
+
+  const finish = useCallback(async (exitCode: number, logTail: string) => {
+    stopPolling();
+    setRunning(false);
+    const despues = await onDone();
+    if (exitCode !== 0) {
+      setError(`La búsqueda terminó con errores${logTail ? `:\n${logTail.slice(-800)}` : "."}`);
+      return;
+    }
+    // Si el conteo de staging no se movió, Drive no traía nada nuevo. Decirlo
+    // explícitamente: un botón que termina en silencio es el problema original.
+    if (antesRef.current !== null && despues !== null && despues === antesRef.current) {
+      setMessage(despues > 0
+        ? "No había archivos nuevos en Drive. Sigue pendiente la cartera que ya estaba en staging."
+        : "Listo. No había archivos nuevos en Drive.");
+    } else if (despues && despues > 0) {
+      setMessage(`Listo. Llegó cartera nueva (${despues.toLocaleString("es-CO")} cuotas) — revisa el banner para cargarla.`);
+    } else {
+      setMessage("Listo.");
+    }
+  }, [stopPolling, onDone]);
+
+  const startPolling = useCallback(() => {
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const res  = await fetch("/api/cruce/trigger/status");
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Error al consultar el estado");
+        if (json.status !== "running") await finish(json.exit_code ?? 0, json.log_tail || "");
+      } catch (err) {
+        stopPolling();
+        setRunning(false);
+        setError(err instanceof Error ? err.message : "Error inesperado");
+      }
+    }, 3000);
+  }, [stopPolling, finish]);
+
+  // Re-enganche al montar: si ya hay una corrida en curso (la disparó otra
+  // persona, u otra pestaña), seguirla en vez de dejar el botón habilitado.
+  // El carril del VPS es uno solo, así que puede ser esta cadena o un reproceso.
+  useEffect(() => {
+    let cancelado = false;
+    (async () => {
+      try {
+        const res  = await fetch("/api/cruce/trigger/status");
+        const json = await res.json();
+        if (!cancelado && res.ok && json.status === "running") {
+          antesRef.current = null;
+          setRunning(true);
+          setMessage("Hay un proceso en curso, siguiéndolo...");
+          startPolling();
+        }
+      } catch {
+        // Sin status no hay nada que retomar: el botón queda utilizable.
+      }
+    })();
+    return () => { cancelado = true; };
+  }, [startPolling]);
+
+  const handleClick = async () => {
+    setRunning(true);
+    setMessage("");
+    setError("");
+    try {
+      antesRef.current = await onDone();
+      const statusRes  = await fetch("/api/cruce/trigger/status");
+      const statusJson = await statusRes.json();
+      if (statusJson.status !== "running") {
+        const res  = await fetch("/api/cruce/trigger", { method: "POST" });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "No se pudo iniciar la búsqueda");
+      }
+      startPolling();
+    } catch (err) {
+      setRunning(false);
+      setError(err instanceof Error ? err.message : "Error inesperado");
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        onClick={handleClick}
+        disabled={running}
+        title="Baja los archivos nuevos de Drive y recalcula. No activa la cartera: eso sigue siendo 'Cargar Cartera'."
+        className="flex items-center gap-1.5 bg-emerald-600 text-white text-sm px-3.5 py-1.5 rounded-full shadow-sm hover:bg-emerald-700 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-60"
+      >
+        <svg className={`w-4 h-4 ${running ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        {running ? "Buscando..." : "Buscar archivos nuevos"}
+      </button>
+      {running && <span className="text-[11px] text-gray-500">Esto puede tardar varios minutos</span>}
+      {message && !running && <span className="text-[11px] text-gray-600 max-w-xs text-right">{message}</span>}
+      {error && <span className="text-[11px] text-red-600 max-w-xs text-right whitespace-pre-wrap">{error}</span>}
+    </div>
+  );
+}
+
 type CarteraPreventivaRow = {
   id: number;
   llave: string;
@@ -243,14 +360,17 @@ export default function CarteraPreventivaView() {
     }
   }, []);
 
-  const fetchStagingStatus = useCallback(async () => {
+  // Devuelve el conteo además de guardarlo: "Buscar archivos nuevos" lo compara
+  // antes y después de la corrida para poder decir si Drive traía algo nuevo.
+  const fetchStagingStatus = useCallback(async (): Promise<number | null> => {
     try {
       const res  = await fetch("/api/cartera-preventiva/staging-status");
       const json = await res.json();
-      if (res.ok) setStagingCount(json.count || 0);
+      if (res.ok) { setStagingCount(json.count || 0); return json.count || 0; }
     } catch {
       // No bloquea la vista si falla — el banner simplemente no aparece.
     }
+    return null;
   }, []);
 
   useEffect(() => {
@@ -888,6 +1008,7 @@ export default function CarteraPreventivaView() {
       <div className={`${PANEL} animate-slide-down px-6 py-4 flex items-center justify-between flex-wrap gap-3`}>
         <h1 className="text-lg font-semibold text-gray-900">Cartera Preventiva</h1>
         <div className="flex items-center gap-2 flex-wrap">
+          <BuscarArchivosButton onDone={async () => { await fetchData(page); return fetchStagingStatus(); }} />
           <button
             onClick={() => setAgregarOpen(true)}
             className="flex items-center gap-1.5 border border-black/10 text-brand-700 text-sm px-3.5 py-1.5 rounded-full hover:bg-brand-50 active:scale-95 transition-all duration-200 ease-(--ease-spring)"
