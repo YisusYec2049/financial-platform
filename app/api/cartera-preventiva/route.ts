@@ -2,13 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { sanitizeSearch } from "@/lib/search";
 
 export async function GET(req: NextRequest) {
   const { user, response } = await requireAuth(req);
   if (response) return response;
 
   const { searchParams } = new URL(req.url);
-  const search       = searchParams.get("search")?.slice(0, 100) || "";
+  const search       = sanitizeSearch(searchParams.get("search"));
   const estado       = searchParams.get("estado") || "todas";
   const vencFrom     = searchParams.get("venc_from") || "";
   const vencTo       = searchParams.get("venc_to") || "";
@@ -30,7 +31,7 @@ export async function GET(req: NextRequest) {
     .select("*", { count: "exact" });
 
   if (search) {
-    query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%`);
+    query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%,codigo_transaccion_1.ilike.%${search}%,inscrip.ilike.%${search}%`);
   }
 
   if (estado === "resuelta") query = query.not("fecha_pago", "is", null);
@@ -73,6 +74,37 @@ export async function GET(req: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // Una "línea de deuda" (la que abre el pipeline cuando alguien paga de menos y
+  // faltan >= $50k) no es una cuota independiente: es el reflejo de la `diferencia`
+  // de su cuota original, y el pipeline la baja sola a medida que la original
+  // recibe plata. Mientras la original siga abierta la plata va EN LA ORIGINAL, así
+  // que ofrecer "Asociar" acá pagaría la misma deuda dos veces. Se independiza
+  // recién cuando la original se cierra (`pago_confirmado` no nulo, que solo lo
+  // escribe una persona con "Cerrar Cuota" / "Cerrar Cartera").
+  //
+  // Se reconoce por la llave: la de la original + un sufijo entre paréntesis
+  // ("3339PN46237" -> "3339PN46237 (2026-07-29)"). La original puede caer fuera de
+  // la página, así que hay que resolverlo acá y no en el frontend.
+  const baseDeLlave = (llave: string) => {
+    const i = llave.lastIndexOf(" (");
+    return i > 0 ? llave.slice(0, i) : "";
+  };
+  const bases = [...new Set((data || []).map((r) => baseDeLlave(r.llave || "")).filter(Boolean))];
+  const abiertaPorLlave = new Map<string, boolean>();
+  if (bases.length > 0) {
+    const { data: originales } = await supabase
+      .from("cartera_preventiva")
+      .select("llave, pago_confirmado")
+      .in("llave", bases);
+    for (const o of originales || []) abiertaPorLlave.set(o.llave, o.pago_confirmado == null);
+  }
+
+  const enriched = (data || []).map((row) => ({
+    ...row,
+    // false también cuando no es línea de deuda o cuando la original ya no existe.
+    original_abierta: abiertaPorLlave.get(baseDeLlave(row.llave || "")) === true,
+  }));
+
   logAudit({
     user_email: user.email ?? "unknown",
     action: "query",
@@ -80,5 +112,5 @@ export async function GET(req: NextRequest) {
     result_count: count ?? 0,
   });
 
-  return NextResponse.json({ data, count, page, pageSize });
+  return NextResponse.json({ data: enriched, count, page, pageSize });
 }

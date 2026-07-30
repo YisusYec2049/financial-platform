@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { sanitizeSearch } from "@/lib/search";
 
 // "Cerrar Cartera" (spec 23/07 §2.2) — medida provisional hasta que todo esté
 // completamente operativo.
@@ -38,7 +39,7 @@ export async function POST(req: NextRequest) {
   if (response) return response;
 
   const body = await req.json().catch(() => ({}));
-  const search       = typeof body?.search === "string" ? body.search.slice(0, 100) : "";
+  const search       = typeof body?.search === "string" ? sanitizeSearch(body.search) : "";
   const estado       = typeof body?.estado === "string" ? body.estado : "todas";
   const vencFrom     = typeof body?.venc_from === "string" ? body.venc_from : "";
   const vencTo       = typeof body?.venc_to === "string" ? body.venc_to : "";
@@ -66,7 +67,7 @@ export async function POST(req: NextRequest) {
     .eq("fecha_cruce", hoy)
     .not("valor_pago", "is", null);
 
-  if (search) query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%`);
+  if (search) query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%,codigo_transaccion_1.ilike.%${search}%,inscrip.ilike.%${search}%`);
   if (estado === "resuelta") query = query.not("fecha_pago", "is", null);
   else if (estado === "pendiente") query = query.is("fecha_pago", null);
   if (vencFrom) query = query.gte("fecha_vencimiento", vencFrom);

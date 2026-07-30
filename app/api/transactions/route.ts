@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { sanitizeSearch } from "@/lib/search";
 
 export async function GET(req: NextRequest) {
   // Autenticación
@@ -9,7 +10,7 @@ export async function GET(req: NextRequest) {
   if (response) return response;
 
   const { searchParams } = new URL(req.url);
-  const search        = searchParams.get("search")?.slice(0, 100) || "";
+  const search        = sanitizeSearch(searchParams.get("search"));
   const paymentMethod = searchParams.get("payment_method")?.slice(0, 100) || "";
   const regFrom       = searchParams.get("reg_from") || "";
   const regTo         = searchParams.get("reg_to") || "";
@@ -48,7 +49,7 @@ export async function GET(req: NextRequest) {
 
   if (search) {
     query = query.or(
-      `identification.ilike.%${search}%,transaction_code_1.ilike.%${search}%,email.ilike.%${search}%`
+      `identification.ilike.%${search}%,transaction_code_1.ilike.%${search}%,email.ilike.%${search}%,matching_key.ilike.%${search}%`
     );
   }
 

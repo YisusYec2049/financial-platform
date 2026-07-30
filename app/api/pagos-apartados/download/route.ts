@@ -2,13 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { sanitizeSearch } from "@/lib/search";
 
 export async function GET(req: NextRequest) {
   const { user, response } = await requireAuth(req);
   if (response) return response;
 
   const { searchParams } = new URL(req.url);
-  const search  = searchParams.get("search")?.slice(0, 100) || "";
+  const search  = sanitizeSearch(searchParams.get("search"));
   const tipo    = searchParams.get("tipo")?.slice(0, 50) || "";
   const regFrom = searchParams.get("reg_from") || "";
   const regTo   = searchParams.get("reg_to") || "";
@@ -31,7 +32,7 @@ export async function GET(req: NextRequest) {
 
     if (search) {
       query = query.or(
-        `identification.ilike.%${search}%,transaction_code_1.ilike.%${search}%,email.ilike.%${search}%,nota.ilike.%${search}%`
+        `identification.ilike.%${search}%,transaction_code_1.ilike.%${search}%,email.ilike.%${search}%,nota.ilike.%${search}%,matching_key.ilike.%${search}%`
       );
     }
     if (tipo) query = query.eq("tipo", tipo);

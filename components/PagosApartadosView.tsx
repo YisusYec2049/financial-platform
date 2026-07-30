@@ -269,7 +269,7 @@ export default function PagosApartadosView() {
             </svg>
             <input
               type="text"
-              placeholder="Buscar por documento, código transacción, correo o motivo..."
+              placeholder="Buscar por documento, código transacción, correo, motivo o VAL..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className={`w-full ${INPUT} rounded-full pl-9 pr-3.5`}

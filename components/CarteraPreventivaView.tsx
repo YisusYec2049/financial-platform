@@ -153,6 +153,11 @@ type CarteraPreventivaRow = {
   diferencia: number | null;
   fecha_cruce: string | null;
   notificacion: string | null;
+  // Lo calcula GET /api/cartera-preventiva: esta fila es una "línea de deuda"
+  // (llave de otra cuota + sufijo entre paréntesis) y su cuota original sigue
+  // abierta. Mientras eso sea cierto la plata se asocia en la original — la
+  // línea es solo el reflejo de su `diferencia` y el pipeline la baja solo.
+  original_abierta?: boolean;
 };
 
 type PagoAsociable = {
@@ -381,19 +386,29 @@ export default function CarteraPreventivaView() {
     fetchStagingStatus();
   }, [fetchMedios, fetchMultiInscripcion, fetchUltimaCuota, fetchSaldosFavor, fetchStagingStatus]);
 
-  // Regla #4/#7: saldos disponibles agrupados por documento+correo (misma
-  // pareja que identifica al "cliente" en cartera_saldos_favor). Rows con
-  // documento/correo null (ledger viejo, previo a esta spec) no agrupan con
-  // nada — no rompen, simplemente no ofrecen el flujo de asociar.
-  const saldoPorGrupo = useMemo(() => {
-    const map = new Map<string, { total: number; rows: SaldoFavorRow[] }>();
+  // Regla #4/#7 (revisada 30/07): documento es la señal FUERTE, correo la
+  // débil. Basta con que coincida UNA de las dos — antes se exigían las dos
+  // y eso dejaba invisibles los saldos de personas sin correo en cartera.
+  const saldosPorDocumento = useMemo(() => {
+    const map = new Map<string, SaldoFavorRow[]>();
     for (const s of saldosFavor) {
-      if (!s.documento || !s.correo) continue;
-      const key = `${s.documento}|${s.correo}`;
-      if (!map.has(key)) map.set(key, { total: 0, rows: [] });
-      const entry = map.get(key)!;
-      entry.total += Number(s.disponible);
-      entry.rows.push(s);
+      const doc = (s.documento || "").trim();
+      if (!doc) continue;
+      if (!map.has(doc)) map.set(doc, []);
+      map.get(doc)!.push(s);
+    }
+    return map;
+  }, [saldosFavor]);
+
+  // El correo solo empareja si PARECE un correo: en cartera hay valores
+  // basura (ej. "0") que apuntan a 5 documentos distintos.
+  const saldosPorCorreo = useMemo(() => {
+    const map = new Map<string, SaldoFavorRow[]>();
+    for (const s of saldosFavor) {
+      const co = (s.correo || "").trim().toLowerCase();
+      if (!co || !co.includes("@")) continue;
+      if (!map.has(co)) map.set(co, []);
+      map.get(co)!.push(s);
     }
     return map;
   }, [saldosFavor]);
@@ -1270,7 +1285,7 @@ export default function CarteraPreventivaView() {
             </svg>
             <input
               type="text"
-              placeholder="Buscar por cliente o matrícula..."
+              placeholder="Buscar por documento, cliente, INCP o VAL..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className={`w-full ${INPUT} rounded-full pl-9 pr-3.5`}
@@ -1478,11 +1493,22 @@ export default function CarteraPreventivaView() {
                   // no en la cuota que originó el saldo (esa ya muestra su
                   // propio badge "Saldo a favor"), solo en las que necesitan
                   // dinero (pendiente o pago parcial).
-                  const grupoKey = `${row.cruce_access}|${row.correo}`;
-                  const grupo = saldoPorGrupo.get(grupoKey);
+                  // Unión de las dos señales, sin repetir un saldo que caiga por ambas.
+                  const porDoc    = saldosPorDocumento.get((row.cruce_access || "").trim()) || [];
+                  const porCorreo = saldosPorCorreo.get((row.correo || "").trim().toLowerCase()) || [];
+                  const saldosDeLaFila = Array.from(
+                    new Map([...porDoc, ...porCorreo].map((s) => [s.id, s])).values()
+                  );
+                  const grupo = saldosDeLaFila.length
+                    ? { total: saldosDeLaFila.reduce((a, s) => a + Number(s.disponible), 0),
+                        rows:  saldosDeLaFila }
+                    : undefined;
                   const esOrigenSaldo = !!grupo?.rows.some((s) => s.llave_origen === row.llave);
                   const necesitaDinero = pendiente || parcial;
-                  const puedeAsociarSaldo = !!grupo && grupo.total > 0 && !esOrigenSaldo && necesitaDinero;
+                  // ...y no en una línea de deuda cuya cuota original siga abierta:
+                  // ahí la plata va en la original, si no se pagaría dos veces.
+                  const puedeAsociarSaldo = !!grupo && grupo.total > 0 && !esOrigenSaldo && necesitaDinero
+                                            && !row.original_abierta;
                   const cuotaRestante = pendiente ? row.valor_a_cobrar : Math.abs(row.diferencia ?? 0);
                   // Regla #3: descartar solo tiene sentido sobre un pago real
                   // ya aplicado — un cierre manual de cartera no tiene pago

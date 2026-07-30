@@ -2,13 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { sanitizeSearch } from "@/lib/search";
 
 export async function GET(req: NextRequest) {
   const { user, response } = await requireAuth(req);
   if (response) return response;
 
   const { searchParams } = new URL(req.url);
-  const search       = searchParams.get("search")?.slice(0, 100) || "";
+  const search       = sanitizeSearch(searchParams.get("search"));
   const estado       = searchParams.get("estado") || "todas";
   const vencFrom     = searchParams.get("venc_from") || "";
   const vencTo       = searchParams.get("venc_to") || "";
@@ -38,7 +39,7 @@ export async function GET(req: NextRequest) {
       .range(from, from + batchSize - 1);
 
     if (search) {
-      query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%`);
+      query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%,codigo_transaccion_1.ilike.%${search}%,inscrip.ilike.%${search}%`);
     }
     if (estado === "resuelta") query = query.not("fecha_pago", "is", null);
     else if (estado === "pendiente") query = query.is("fecha_pago", null);
