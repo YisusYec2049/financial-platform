@@ -7,8 +7,17 @@ import { logAudit } from "@/lib/audit";
 // ya no se auto-aplica) a una cuota destino elegida a mano. Escribe
 // pago_asociaciones (mismo contrato que el panel de asociar de §4.1: el
 // pipeline es quien escribe el cierre de la cuota destino en su próxima
-// corrida) y decrementa disponible en el ledger — si llega a 0, aplicado pasa
-// a true (igual que hace el pipeline cuando el sobrante se consume solo).
+// corrida) y decrementa disponible en el ledger.
+//
+// Las dos escrituras son UNA sola llamada a la función asociar_saldo() (spec
+// 30/07), por dos motivos:
+//  1. Si el pago del saldo YA tenía vínculo con esta cuota, hay que SUMAR al
+//     monto existente, no insertar otra fila: pago_asociaciones tiene
+//     unique (matching_key, llave), así que el insert seco reventaba con
+//     "duplicate key". Y reemplazar borraría lo que ese mismo pago ya aplicó.
+//  2. Sueltas, si la segunda falla la plata queda contada dos veces (aplicada
+//     a la cuota y todavía disponible). La función además bloquea la fila del
+//     ledger, así que dos clics simultáneos no pueden gastar el mismo saldo.
 export async function POST(req: NextRequest) {
   const { user, response } = await requireAuth(req);
   if (response) return response;
@@ -24,37 +33,33 @@ export async function POST(req: NextRequest) {
 
   const supabase = createAdminClient();
 
-  const { data: saldo, error: saldoError } = await supabase
-    .from("cartera_saldos_favor")
-    .select("id, matching_key, disponible, aplicado")
-    .eq("id", saldoId)
-    .maybeSingle();
+  // Validar, vincular y descontar: o pasan las tres o no pasa ninguna. Las
+  // validaciones viven dentro de la función, donde no se pueden esquivar.
+  const { data, error } = await supabase.rpc("asociar_saldo", {
+    p_saldo_id: saldoId,
+    p_llave:    llave,
+    p_monto:    monto,
+  });
 
-  if (saldoError) return NextResponse.json({ error: saldoError.message }, { status: 500 });
-  if (!saldo) return NextResponse.json({ error: "Saldo a favor no encontrado" }, { status: 404 });
-  if (saldo.aplicado) return NextResponse.json({ error: "Este saldo ya fue aplicado" }, { status: 400 });
-  if (monto > Number(saldo.disponible) + 0.01) {
-    return NextResponse.json({ error: "El monto excede el saldo disponible" }, { status: 400 });
+  if (error) {
+    // El fallo TAMBIÉN se registra: un error silencioso acá fue la mitad más
+    // difícil del bug del descarte (27 de julio), donde la bitácora decía que
+    // nadie había hecho nada.
+    logAudit({
+      user_email: user.email ?? "unknown",
+      action: "insert",
+      filters: { saldo_id: saldoId, llave, monto, view: "asociar_saldo", error: error.message },
+      result_count: 0,
+    });
+    return NextResponse.json({ error: error.message }, { status: 400 });
   }
-
-  const { error: insertError } = await supabase
-    .from("pago_asociaciones")
-    .insert({ matching_key: saldo.matching_key, llave, monto, origen: "manual" });
-  if (insertError) return NextResponse.json({ error: insertError.message }, { status: 500 });
-
-  const nuevoDisponible = Math.max(0, Number(saldo.disponible) - monto);
-  const { error: updateError } = await supabase
-    .from("cartera_saldos_favor")
-    .update({ disponible: nuevoDisponible, aplicado: nuevoDisponible <= 0.01 })
-    .eq("id", saldoId);
-  if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
 
   logAudit({
     user_email: user.email ?? "unknown",
     action: "insert",
-    filters: { saldo_id: saldoId, matching_key: saldo.matching_key, llave, monto, view: "pago_asociaciones+cartera_saldos_favor" },
+    filters: { saldo_id: saldoId, llave, monto, view: "pago_asociaciones+cartera_saldos_favor" },
     result_count: 1,
   });
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json({ success: true, ...data });
 }
