@@ -21,13 +21,16 @@ export async function GET(req: NextRequest) {
   const cruceTo      = searchParams.get("cruce_to") || "";
   const conNotificacion = searchParams.get("con_notificacion") === "1";
   const wompiTipo    = searchParams.get("wompi_tipo") || "";
+  const multiCuota   = searchParams.get("multi_cuota") === "1";
   const page          = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const pageSize      = 100;
   const offset        = (page - 1) * pageSize;
 
   const supabase = createAdminClient();
+  // `cartera_preventiva_v` = la tabla + la columna calculada `cuotas_inscripcion`.
+  // Solo lectura: todas las escrituras siguen apuntando a la tabla.
   let query = supabase
-    .from("cartera_preventiva")
+    .from("cartera_preventiva_v")
     .select("*", { count: "exact" });
 
   if (search) {
@@ -61,6 +64,12 @@ export async function GET(req: NextRequest) {
   // Filtro 2 (spec Wompi-Placetopay): solo se envía cuando el Filtro 1 = "Wompi"
   if (wompiTipo === "automatico") query = query.eq("es_wompi_automatico", true);
   else if (wompiTipo === "manual") query = query.eq("es_wompi_automatico", false);
+
+  // "Inscripciones con varias cuotas": cuenta CUOTAS, no renglones — una cuota
+  // cobrada por partes ("llave" + "llave (fecha)") cuenta como una sola. El conteo
+  // lo trae la vista, calculado sobre TODA la cartera: que la persona ponga un
+  // rango de fechas no cambia cuántas cuotas debe la inscripción.
+  if (multiCuota) query = query.gt("cuotas_inscripcion", 1);
 
   // Regla #5 (Spec Auto Cartera): una cuota "FALTA DE PAGO" hereda inscrip y
   // fecha_vencimiento de la cuota de la que se partió, así que ordenar por
@@ -108,7 +117,7 @@ export async function GET(req: NextRequest) {
   logAudit({
     user_email: user.email ?? "unknown",
     action: "query",
-    filters: { search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, wompiTipo, page, view: "cartera_preventiva" },
+    filters: { search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, wompiTipo, multiCuota, page, view: "cartera_preventiva" },
     result_count: count ?? 0,
   });
 

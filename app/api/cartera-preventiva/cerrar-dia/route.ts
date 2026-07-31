@@ -49,6 +49,7 @@ export async function POST(req: NextRequest) {
   const payTo        = typeof body?.pay_to === "string" ? body.pay_to : "";
   const conNotificacion = body?.con_notificacion === "1" || body?.con_notificacion === true;
   const wompiTipo    = typeof body?.wompi_tipo === "string" ? body.wompi_tipo : "";
+  const multiCuota   = body?.multi_cuota === "1" || body?.multi_cuota === true;
 
   // El día del cierre lo decide el cliente (su zona horaria), no el servidor.
   const hoy = typeof body?.dia === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.dia)
@@ -62,7 +63,11 @@ export async function POST(req: NextRequest) {
   // aplican: este botón siempre trabaja sobre el día de hoy.
   // La anotación `typeof base` corta la inferencia en cada paso: sin ella, encadenar
   // ~13 filtros condicionales hace explotar el tipo del builder (TS2589).
-  const base = supabase.from("cartera_preventiva").select("*");
+  // La LECTURA va contra la vista (trae `cuotas_inscripcion`), igual que la pantalla:
+  // este endpoint decide QUÉ cuotas cierra, así que si su consulta no coincidiera con
+  // la de la vista escribiría plata sobre un conjunto distinto del que la persona ve.
+  // Los `update` de más abajo siguen apuntando a la tabla — en una vista no se escribe.
+  const base = supabase.from("cartera_preventiva_v").select("*");
   let query: typeof base = base
     .eq("fecha_cruce", hoy)
     .not("valor_pago", "is", null);
@@ -86,6 +91,8 @@ export async function POST(req: NextRequest) {
   if (conNotificacion) query = query.not("notificacion", "is", null).neq("notificacion", "").neq("notificacion", "FALTA DE PAGO");
   if (wompiTipo === "automatico") query = query.eq("es_wompi_automatico", true);
   else if (wompiTipo === "manual") query = query.eq("es_wompi_automatico", false);
+  // Ver comentario en GET /api/cartera-preventiva: cuenta cuotas, no renglones.
+  if (multiCuota) query = query.gt("cuotas_inscripcion", 1);
 
   const { data, error } = await query.limit(MAX_ROWS);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -131,7 +138,7 @@ export async function POST(req: NextRequest) {
   await logAudit({
     user_email: user.email ?? "unknown",
     action: "cerrar_cartera_dia",
-    filters: { dia: hoy, search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, conNotificacion, wompiTipo, view: "cartera_preventiva" },
+    filters: { dia: hoy, search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, conNotificacion, wompiTipo, multiCuota, view: "cartera_preventiva" },
     result_count: cerradas,
   });
 

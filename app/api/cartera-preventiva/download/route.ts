@@ -21,6 +21,7 @@ export async function GET(req: NextRequest) {
   const cruceTo      = searchParams.get("cruce_to") || "";
   const conNotificacion = searchParams.get("con_notificacion") === "1";
   const wompiTipo    = searchParams.get("wompi_tipo") || "";
+  const multiCuota   = searchParams.get("multi_cuota") === "1";
 
   const supabase = createAdminClient();
   const MAX_ROWS = 50_000;
@@ -32,8 +33,10 @@ export async function GET(req: NextRequest) {
     const remaining = MAX_ROWS - allData.length;
     const batchSize = Math.min(BATCH, remaining);
 
+    // La vista, igual que la pantalla: trae `cuotas_inscripcion` como columna extra
+    // (se deja a propósito en el Excel) y permite el filtro de varias cuotas.
     let query = supabase
-      .from("cartera_preventiva")
+      .from("cartera_preventiva_v")
       .select("*")
       .order("fecha_vencimiento", { ascending: true })
       .range(from, from + batchSize - 1);
@@ -68,6 +71,9 @@ export async function GET(req: NextRequest) {
     if (wompiTipo === "automatico") query = query.eq("es_wompi_automatico", true);
     else if (wompiTipo === "manual") query = query.eq("es_wompi_automatico", false);
 
+    // Ver comentario en GET /api/cartera-preventiva: cuenta cuotas, no renglones.
+    if (multiCuota) query = query.gt("cuotas_inscripcion", 1);
+
     const { data, error } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     if (!data || data.length === 0) break;
@@ -90,7 +96,7 @@ export async function GET(req: NextRequest) {
   await logAudit({
     user_email: user.email ?? "unknown",
     action: "download",
-    filters: { search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, wompiTipo, view: "cartera_preventiva" },
+    filters: { search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, wompiTipo, multiCuota, view: "cartera_preventiva" },
     result_count: deduped.length,
   });
 

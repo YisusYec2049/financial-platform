@@ -153,6 +153,11 @@ type CarteraPreventivaRow = {
   diferencia: number | null;
   fecha_cruce: string | null;
   notificacion: string | null;
+  // Cuántas cuotas distintas debe la inscripción de esta fila, sobre TODA la cartera.
+  // Lo calcula la vista `cartera_preventiva_v` colapsando los renglones de una misma
+  // cuota cobrada por partes ("llave" + "llave (fecha)"). Alimenta el filtro
+  // "Inscripciones con varias cuotas".
+  cuotas_inscripcion?: number | null;
   // Lo calcula GET /api/cartera-preventiva: esta fila es una "línea de deuda"
   // (llave de otra cuota + sufijo entre paréntesis) y su cuota original sigue
   // abierta. Mientras eso sea cierto la plata se asocia en la original — la
@@ -227,6 +232,7 @@ export default function CarteraPreventivaView() {
   const [cruceFrom, setCruceFrom]       = useSessionState("cartera_preventiva.cruceFrom", "");
   const [cruceTo, setCruceTo]           = useSessionState("cartera_preventiva.cruceTo", "");
   const [conNotificacion, setConNotificacion] = useSessionState("cartera_preventiva.conNotificacion", false);
+  const [multiCuota, setMultiCuota] = useSessionState("cartera_preventiva.multiCuota", false);
   const [medios, setMedios]             = useState<{ label: string; value: string }[]>([]);
   const [fetchError, setFetchError]     = useState("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -296,6 +302,7 @@ export default function CarteraPreventivaView() {
     if (cruceFrom)    params.set("cruce_from", cruceFrom);
     if (cruceTo)      params.set("cruce_to", cruceTo);
     if (conNotificacion) params.set("con_notificacion", "1");
+    if (multiCuota)   params.set("multi_cuota", "1");
     if (medioPago === "WOMPI%" && wompiTipo) params.set("wompi_tipo", wompiTipo);
     params.set("page", String(currentPage));
 
@@ -311,7 +318,7 @@ export default function CarteraPreventivaView() {
     } finally {
       setLoading(false);
     }
-  }, [search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, wompiTipo]);
+  }, [search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, multiCuota, wompiTipo]);
 
   const fetchMedios = useCallback(async () => {
     const res  = await fetch("/api/cartera-preventiva/medios-pago");
@@ -420,7 +427,7 @@ export default function CarteraPreventivaView() {
       fetchData(1);
     }, 400);
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
-  }, [search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, wompiTipo, fetchData]);
+  }, [search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, multiCuota, wompiTipo, fetchData]);
 
 
   useEffect(() => {
@@ -446,6 +453,7 @@ export default function CarteraPreventivaView() {
     if (cruceFrom)    params.set("cruce_from", cruceFrom);
     if (cruceTo)      params.set("cruce_to", cruceTo);
     if (conNotificacion) params.set("con_notificacion", "1");
+    if (multiCuota)   params.set("multi_cuota", "1");
     if (medioPago === "WOMPI%" && wompiTipo) params.set("wompi_tipo", wompiTipo);
     return params;
   };
@@ -1370,9 +1378,18 @@ export default function CarteraPreventivaView() {
             />
             <span className="font-medium">Con notificación de pago de más</span>
           </label>
-          {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || medioPago || payFrom || payTo || cruceFrom || cruceTo || conNotificacion || wompiTipo) && (
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={multiCuota}
+              onChange={(e) => { setMultiCuota(e.target.checked); setPage(1); }}
+              className="rounded border-gray-300 text-brand-600 focus:ring-brand-500/50"
+            />
+            <span className="font-medium">Inscripciones con varias cuotas</span>
+          </label>
+          {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || medioPago || payFrom || payTo || cruceFrom || cruceTo || conNotificacion || multiCuota || wompiTipo) && (
             <button
-              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setMedioPago(""); setPayFrom(""); setPayTo(""); setCruceFrom(""); setCruceTo(""); setConNotificacion(false); setWompiTipo(""); setPage(1); }}
+              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setMedioPago(""); setPayFrom(""); setPayTo(""); setCruceFrom(""); setCruceTo(""); setConNotificacion(false); setMultiCuota(false); setWompiTipo(""); setPage(1); }}
               className="text-red-500 hover:text-red-700 text-xs underline"
             >
               Limpiar filtros
@@ -1518,7 +1535,12 @@ export default function CarteraPreventivaView() {
                   <tr key={row.id} className={`hover:bg-gray-50/70 transition-colors duration-100 align-top ${rowTint(row)}`}>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.llave)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.sistema_financiero)}</td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.inscrip)}</td>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">
+                      {fmt(row.inscrip)}
+                      {(row.cuotas_inscripcion ?? 1) > 1 && (
+                        <span className="ml-1.5 text-[11px] text-gray-500">{row.cuotas_inscripcion} cuotas</span>
+                      )}
+                    </td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cliente)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.moneda)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.fecha_vencimiento)}</td>
