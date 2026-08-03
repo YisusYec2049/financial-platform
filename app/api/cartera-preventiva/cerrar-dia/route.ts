@@ -13,8 +13,9 @@ import { sanitizeSearch } from "@/lib/search";
 // NO se fuerza a cero: si la persona pagó de menos, el faltante queda a la vista,
 // que es justo lo que el equipo usa para repartir la deuda en la cartera siguiente.
 //
-// Alcance: los filtros activos de la vista Y el día de hoy (`fecha_cruce`, el día
-// en que el sistema identificó el pago — no `fecha_pago`, que suele ser días antes).
+// Alcance: los filtros activos de la vista, incluido el de "Día del Cruce"
+// (`fecha_cruce`, el día en que el sistema identificó el pago — no `fecha_pago`, que
+// suele ser días antes). Sin ese filtro puesto, el día de hoy.
 // La pantalla filtrada ES la revisión: no se filtra por diferencia, se cierra todo
 // lo que esté ahí (los faltantes grandes no llegan a aparecer, el pipeline ya les
 // abrió una cuota nueva; y la plata que sobra vive aparte en cartera_saldos_favor).
@@ -47,6 +48,8 @@ export async function POST(req: NextRequest) {
   const medioPago    = typeof body?.medio_pago === "string" ? body.medio_pago.slice(0, 100) : "";
   const payFrom      = typeof body?.pay_from === "string" ? body.pay_from : "";
   const payTo        = typeof body?.pay_to === "string" ? body.pay_to : "";
+  const cruceFrom    = typeof body?.cruce_from === "string" ? body.cruce_from : "";
+  const cruceTo      = typeof body?.cruce_to === "string" ? body.cruce_to : "";
   const conNotificacion = body?.con_notificacion === "1" || body?.con_notificacion === true;
   const wompiTipo    = typeof body?.wompi_tipo === "string" ? body.wompi_tipo : "";
   const multiCuota   = body?.multi_cuota === "1" || body?.multi_cuota === true;
@@ -58,9 +61,8 @@ export async function POST(req: NextRequest) {
 
   const supabase = createAdminClient();
 
-  // Mismos filtros que GET /api/cartera-preventiva, más el día y la condición de
-  // que haya algo que copiar. Los filtros de fecha de cruce de la vista no se
-  // aplican: este botón siempre trabaja sobre el día de hoy.
+  // Mismos filtros que GET /api/cartera-preventiva, más la condición de que haya algo
+  // que copiar.
   // La anotación `typeof base` corta la inferencia en cada paso: sin ella, encadenar
   // ~13 filtros condicionales hace explotar el tipo del builder (TS2589).
   // La LECTURA va contra la vista (trae `cuotas_inscripcion`), igual que la pantalla:
@@ -68,9 +70,21 @@ export async function POST(req: NextRequest) {
   // la de la vista escribiría plata sobre un conjunto distinto del que la persona ve.
   // Los `update` de más abajo siguen apuntando a la tabla — en una vista no se escribe.
   const base = supabase.from("cartera_preventiva_v").select("*");
-  let query: typeof base = base
-    .eq("fecha_cruce", hoy)
-    .not("valor_pago", "is", null);
+  let query: typeof base = base.not("valor_pago", "is", null);
+
+  // El filtro "Día del Cruce" de la pantalla manda. La vista siempre lo envía en el
+  // cuerpo; hasta el 2026-08-03 este endpoint no lo leía y cerraba SIEMPRE lo de hoy,
+  // así que querer cerrar lo del viernes respondía "0 cuotas" — que se lee como
+  // confirmación, no como "no hice nada".
+  // El `else` no es opcional: sin filtro puesto el botón tiene que seguir alcanzando
+  // solo el día de hoy. Si cerrara todos los días, la rutina de cada mañana arrastraría
+  // cuotas viejas sin que nadie lo pida.
+  if (cruceFrom || cruceTo) {
+    if (cruceFrom) query = query.gte("fecha_cruce", cruceFrom);
+    if (cruceTo)   query = query.lte("fecha_cruce", cruceTo);
+  } else {
+    query = query.eq("fecha_cruce", hoy);
+  }
 
   if (search) query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%,codigo_transaccion_1.ilike.%${search}%,inscrip.ilike.%${search}%`);
   if (estado === "resuelta") query = query.not("fecha_pago", "is", null);
@@ -138,7 +152,7 @@ export async function POST(req: NextRequest) {
   await logAudit({
     user_email: user.email ?? "unknown",
     action: "cerrar_cartera_dia",
-    filters: { dia: hoy, search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, conNotificacion, wompiTipo, multiCuota, view: "cartera_preventiva" },
+    filters: { dia: hoy, cruceFrom, cruceTo, search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, conNotificacion, wompiTipo, multiCuota, view: "cartera_preventiva" },
     result_count: cerradas,
   });
 

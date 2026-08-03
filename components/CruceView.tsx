@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef, useLayoutEffect } from "react";
 import * as XLSX from "xlsx";
 import { useSessionState } from "@/lib/useSessionState";
+import { useReproceso } from "@/lib/useReproceso";
 import CruceExcepcionesView, { type CruceExcepcionesViewRef } from "@/components/CruceExcepcionesView";
 
 type TriggerStatus = "idle" | "running" | "done";
@@ -167,6 +168,15 @@ type CruceRow = {
   cruce: string | null;
 };
 
+/**
+ * El PATCH escribe los cinco campos COMO BLOQUE: lo que no venga en el cuerpo se guarda
+ * como `null`. Por eso el formulario arranca con los valores actuales de la fila y los manda
+ * todos, aunque aquí solo se editen INCP y Correo(2) — mandar solo el INCP borraría
+ * `nombre`/`metodo_de_pago`/`ci` (los datos del pagador de WOMPI), y no se recuperan solos:
+ * al quedar la fila `corregido_manual`, la re-evaluación de WOMPI del pipeline la salta.
+ */
+type EditState = { incp: string; correo_2: string; nombre: string; metodo_de_pago: string; ci: string };
+
 export default function CruceView() {
   const [tab, setTab]                     = useState<"todas" | "excepciones">("todas");
   const [data, setData]                   = useState<CruceRow[]>([]);
@@ -185,6 +195,10 @@ export default function CruceView() {
   const [fetchError, setFetchError]       = useState("");
   const [dropdownOpen, setDropdownOpen]   = useState(false);
   const [wompiDropdownOpen, setWompiDropdownOpen] = useState(false);
+  const [edits, setEdits]                 = useState<Record<string, EditState>>({});
+  const [savingKey, setSavingKey]         = useState<string | null>(null);
+  const [rowMessage, setRowMessage]       = useState<Record<string, string>>({});
+  const [rowError, setRowError]           = useState<Record<string, string>>({});
   const searchTimeout                     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef                = useRef<AbortController | null>(null);
   const tableContainerRef                 = useRef<HTMLDivElement>(null);
@@ -385,6 +399,79 @@ export default function CruceView() {
     else excepcionesRef.current?.refresh();
   };
 
+  // El pipeline corre 1 vez al día: corregir el INCP de una fila ya cruzada tiene que poder
+  // reprocesarse en el momento, o la plata no se mueve hasta la corrida del día siguiente.
+  // En la pestaña "Excepciones" el badge lo pone su propio componente, así que aquí solo se
+  // refresca (y se muestra) cuando la pestaña activa es "Todas".
+  const { fireTrigger, reprocesoBadge, isRecalculando, marcaFila } = useReproceso(() => {
+    if (tab === "todas") fetchData(page);
+  });
+
+  const getEdit = (row: CruceRow): EditState =>
+    edits[row.matching_key] ?? {
+      incp: row.incp ?? "",
+      correo_2: row.correo_2 ?? "",
+      nombre: row.nombre ?? "",
+      metodo_de_pago: row.metodo_de_pago ?? "",
+      ci: row.ci ?? "",
+    };
+
+  const setEdit = (row: CruceRow, field: keyof EditState, value: string) => {
+    setEdits((prev) => ({
+      ...prev,
+      [row.matching_key]: { ...getEdit(row), ...prev[row.matching_key], [field]: value },
+    }));
+  };
+
+  // Solo hay algo que guardar si el usuario cambió INCP o Correo(2): los otros tres campos
+  // se reenvían tal cual vinieron. Sin este chequeo, un clic de más marcaría la fila como
+  // `corregido_manual` sin haber corregido nada, y el pipeline dejaría de re-evaluarla.
+  const hasEdit = (row: CruceRow) => {
+    const edit = getEdit(row);
+    return edit.incp !== (row.incp ?? "") || edit.correo_2 !== (row.correo_2 ?? "");
+  };
+
+  const handleSaveCruce = async (row: CruceRow) => {
+    const edit = getEdit(row);
+    setSavingKey(row.matching_key);
+    setRowError((prev) => ({ ...prev, [row.matching_key]: "" }));
+    setRowMessage((prev) => ({ ...prev, [row.matching_key]: "" }));
+    try {
+      const res = await fetch("/api/cruce/exceptions", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          matching_key: row.matching_key,
+          incp: edit.incp,
+          correo_2: edit.correo_2,
+          nombre: edit.nombre,
+          metodo_de_pago: edit.metodo_de_pago,
+          ci: edit.ci,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al guardar");
+      setData((prev) => prev.map((r) => r.matching_key === row.matching_key
+        ? { ...r, incp: edit.incp, correo_2: edit.correo_2 }
+        : r));
+      setEdits((prev) => {
+        const next = { ...prev };
+        delete next[row.matching_key];
+        return next;
+      });
+      setRowMessage((prev) => ({ ...prev, [row.matching_key]: "Guardado. Se aplica al terminar el recálculo." }));
+      // Acción sobre UN pago → reproceso puntual (spec "Reproceso de un solo pago").
+      fireTrigger(row.matching_key, { matchingKey: row.matching_key });
+    } catch (err) {
+      setRowError((prev) => ({
+        ...prev,
+        [row.matching_key]: err instanceof Error ? err.message : "Error inesperado",
+      }));
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
   const fmt = (v: string | null) => v || "—";
   const fmtMonto = (v: number | null) =>
     v != null ? new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(v) : "—";
@@ -419,6 +506,7 @@ export default function CruceView() {
         <CruceExcepcionesView ref={excepcionesRef} />
       ) : (
       <>
+      {reprocesoBadge}
       <div className={`${PANEL} animate-fade-in [animation-delay:60ms] px-6 py-4 space-y-3`}>
         <div className="flex gap-3 flex-wrap items-center">
           <div className="relative w-80">
@@ -594,13 +682,14 @@ export default function CruceView() {
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Método de Pago</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">CI</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Cruce</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Acciones</th>
               </tr>
             </thead>
             <tbody key={page} className="divide-y divide-gray-100 animate-fade-in">
               {loading && data.length === 0 ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 15 }).map((_, j) => (
+                    {Array.from({ length: 16 }).map((_, j) => (
                       <td key={j} className="px-4 py-3">
                         <div className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * j * 7) % 40}%` }} />
                       </td>
@@ -609,11 +698,15 @@ export default function CruceView() {
                 ))
               ) : data.length === 0 ? (
                 <tr>
-                  <td colSpan={15} className="text-center py-12 text-gray-400">No hay registros</td>
+                  <td colSpan={16} className="text-center py-12 text-gray-400">No hay registros</td>
                 </tr>
               ) : (
-                data.map((row) => (
-                  <tr key={row.matching_key} className="hover:bg-gray-50/70 transition-colors duration-100">
+                data.map((row) => {
+                  const edit    = getEdit(row);
+                  const saving  = savingKey === row.matching_key;
+                  const changed = hasEdit(row);
+                  return (
+                  <tr key={row.matching_key} className="hover:bg-gray-50/70 transition-colors duration-100 align-top">
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.identification)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.payment_date)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_1)}</td>
@@ -627,14 +720,52 @@ export default function CruceView() {
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.program)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.phone)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.payment_amount)}</td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.incp)}</td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.correo_2)}</td>
+                    <td className="px-4 py-2.5">
+                      <input
+                        type="text"
+                        value={edit.incp}
+                        onChange={(e) => setEdit(row, "incp", e.target.value)}
+                        disabled={saving}
+                        title="INCP — corrígelo si el pago cruzó contra la inscripción equivocada"
+                        className="w-28 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                      />
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <input
+                        type="text"
+                        value={edit.correo_2}
+                        onChange={(e) => setEdit(row, "correo_2", e.target.value)}
+                        disabled={saving}
+                        className="w-36 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                      />
+                    </td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.nombre)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.metodo_de_pago)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.ci)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cruce)}</td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex flex-col gap-1 min-w-[150px]">
+                        {changed && (
+                          <button
+                            onClick={() => handleSaveCruce(row)}
+                            disabled={saving || isRecalculando(row.matching_key)}
+                            className="text-xs px-2.5 py-1.5 rounded-lg bg-brand-700 text-white hover:bg-brand-800 hover:brightness-105 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 disabled:active:scale-100"
+                          >
+                            {saving ? "Guardando..." : "Guardar corrección"}
+                          </button>
+                        )}
+                        {marcaFila(row.matching_key)}
+                        {rowMessage[row.matching_key] && (
+                          <span className="text-[11px] text-green-700">{rowMessage[row.matching_key]}</span>
+                        )}
+                        {rowError[row.matching_key] && (
+                          <span className="text-[11px] text-red-600">{rowError[row.matching_key]}</span>
+                        )}
+                      </div>
+                    </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

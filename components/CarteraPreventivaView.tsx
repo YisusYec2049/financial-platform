@@ -958,10 +958,23 @@ export default function CarteraPreventivaView() {
     }
   };
 
-  // §2.2: cierra en bloque las cuotas cruzadas hoy que coincidan con los filtros
-  // de la vista. No dispara reproceso: la escritura es inmediata y el pipeline la
-  // respeta (su chequeo de idempotencia compara valor_pago contra la suma de
-  // asociaciones, que no cambia al cerrar).
+  // Qué día alcanza "Cerrar Cartera": el filtro "Día del Cruce" de la vista si está
+  // puesto, y si no, hoy — el mismo criterio que aplica el endpoint. El aviso tiene que
+  // nombrarlo: desde que el botón respeta el filtro puede alcanzar cualquier rango, y
+  // no se puede deshacer desde la UI.
+  const cierreDiaLabel =
+    cruceFrom && cruceTo
+      ? (cruceFrom === cruceTo ? `el ${cruceFrom}` : `entre el ${cruceFrom} y el ${cruceTo}`)
+      : cruceFrom
+      ? `desde el ${cruceFrom}`
+      : cruceTo
+      ? `hasta el ${cruceTo}`
+      : "hoy";
+
+  // §2.2: cierra en bloque las cuotas cruzadas en el día alcanzado que coincidan con
+  // los filtros de la vista. No dispara reproceso: la escritura es inmediata y el
+  // pipeline la respeta (su chequeo de idempotencia compara valor_pago contra la suma
+  // de asociaciones, que no cambia al cerrar).
   const handleCerrarDia = async () => {
     setCerrandoDia(true);
     setCerrarDiaError("");
@@ -977,7 +990,7 @@ export default function CarteraPreventivaView() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al cerrar la cartera del día");
-      const partes = [`Se cerraron ${json.cerradas} cuota(s) del día.`];
+      const partes = [`Se cerraron ${json.cerradas} cuota(s) cruzada(s) ${cierreDiaLabel}.`];
       if (json.saltadas > 0) partes.push(`${json.saltadas} ya estaban cerradas o sin pago identificado.`);
       if (json.errores?.length) partes.push(`Con errores: ${json.errores.join(" · ")}`);
       setCerrarDiaMessage(partes.join(" "));
@@ -1046,7 +1059,7 @@ export default function CarteraPreventivaView() {
           <button
             onClick={() => { setCerrarDiaOpen(true); setCerrarDiaMessage(""); setCerrarDiaError(""); }}
             disabled={cerrandoDia}
-            title="Pasa valor_pago a pago en las cuotas cruzadas hoy que coincidan con los filtros de la vista"
+            title={`Pasa valor_pago a pago en las cuotas cruzadas ${cierreDiaLabel} que coincidan con los filtros de la vista`}
             className="flex items-center gap-1.5 bg-slate-700 text-white text-sm px-3.5 py-1.5 rounded-full shadow-sm hover:bg-slate-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1067,15 +1080,19 @@ export default function CarteraPreventivaView() {
       {cerrarDiaOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4" onClick={() => !cerrandoDia && setCerrarDiaOpen(false)}>
           <div className={`${PANEL} animate-pop-in max-w-md w-full p-6 space-y-3`} onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-base font-semibold text-gray-900">¿Estás seguro de cerrar la cartera del día?</h2>
+            <h2 className="text-base font-semibold text-gray-900">
+              ¿Estás seguro de cerrar la cartera cruzada {cierreDiaLabel}?
+            </h2>
             <p className="text-sm text-gray-600">
-              Se marcarán como cobradas las cuotas cruzadas hoy que coincidan con los filtros
-              puestos en la vista: el valor identificado pasa a la columna <span className="font-medium">Pago</span> y
+              Se marcarán como cobradas las cuotas cruzadas <span className="font-medium">{cierreDiaLabel}</span> que
+              coincidan con los filtros puestos en la vista (<span className="font-medium">{total.toLocaleString("es-CO")}</span> en
+              pantalla): el valor identificado pasa a la columna <span className="font-medium">Pago</span> y
               lo que falte queda a la vista en <span className="font-medium">Valor a Cobrar</span>.
             </p>
             <p className="text-xs text-gray-500">
               No se puede deshacer desde esta pantalla. Las cuotas ya cerradas y las que no tienen
-              pago identificado se saltan solas, así que darle dos veces no hace daño.
+              pago identificado se saltan solas —así que el número final puede ser menor, y darle
+              dos veces no hace daño.
             </p>
             <div className="flex justify-end gap-2 pt-1">
               <button
