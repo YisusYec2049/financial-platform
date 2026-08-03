@@ -440,7 +440,8 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
       setData((prev) => prev.map((r) => r.matching_key === row.matching_key
         ? { ...r, incp: edit.incp, correo_2: edit.correo_2, nombre: edit.nombre, metodo_de_pago: edit.metodo_de_pago, ci: edit.ci, estado_cruce: "cruzado" }
         : r));
-      fireTrigger(row.matching_key);
+      // Acción sobre UN pago → reproceso puntual (spec "Reproceso de un solo pago").
+      fireTrigger(row.matching_key, { matchingKey: row.matching_key });
     } catch (err) {
       setRowActionError((prev) => ({
         ...prev,

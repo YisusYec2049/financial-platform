@@ -214,7 +214,8 @@ export default function PagosApartadosView() {
       if (!res.ok) throw new Error(json.error || "Error al guardar");
       setData((prev) => prev.map((r) => r.matching_key === row.matching_key ? { ...r, incp_resuelto: incpResuelto || null } : r));
       setRowMessage((prev) => ({ ...prev, [row.matching_key]: "INCP guardado. Vuelve al proceso en el próximo cruce." }));
-      fireTrigger(row.matching_key);
+      // Acción sobre UN pago → reproceso puntual (spec "Reproceso de un solo pago").
+      fireTrigger(row.matching_key, { matchingKey: row.matching_key });
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {

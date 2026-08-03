@@ -373,7 +373,8 @@ export default function TransactionsView() {
         return next;
       });
       setRowMessage((prev) => ({ ...prev, [row.matching_key]: "Documento corregido. Se recuerda para pagos futuros con el mismo documento." }));
-      fireTrigger(row.matching_key);
+      // Acción sobre UN pago → reproceso puntual (spec "Reproceso de un solo pago").
+      fireTrigger(row.matching_key, { matchingKey: row.matching_key });
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
