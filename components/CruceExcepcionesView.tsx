@@ -516,8 +516,9 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
       setDiscardCandidates((prev) => ({ ...prev, [key]: (prev[key] || []).filter((c) => c !== candidate) }));
       setDiscardMessage((prev) => ({ ...prev, [key]: "Se descartó este número. La fila se actualiza sola al terminar el recálculo." }));
       // §3: era uno de los 3 huecos — el descarte se guardaba y no pasaba nada más
-      // hasta la corrida del día siguiente.
-      fireTrigger(key);
+      // hasta la corrida del día siguiente. Es una acción sobre UN pago, así que va
+      // en modo puntual (spec "Reproceso de un solo pago", 2026-08-02).
+      fireTrigger(key, { matchingKey: key });
     } catch (err) {
       setDiscardError((prev) => ({ ...prev, [key]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
@@ -553,7 +554,8 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
       // que usa matching-test para saber que hay que volver a cruzar), así que al
       // recargar la vista se volverá a ver el anterior hasta que el pipeline reprocese.
       setDocMessage((prev) => ({ ...prev, [row.matching_key]: "Documento corregido. Se aplicará al terminar el recálculo." }));
-      fireTrigger(row.matching_key);
+      // Acción sobre UN pago → reproceso puntual.
+      fireTrigger(row.matching_key, { matchingKey: row.matching_key });
     } catch (err) {
       setDocError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {

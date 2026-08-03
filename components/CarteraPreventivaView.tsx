@@ -6,11 +6,13 @@ import { useSessionState } from "@/lib/useSessionState";
 import { useReproceso } from "@/lib/useReproceso";
 import { parseMonto, formatMonto } from "@/lib/monto";
 
-// Baja los Excel de Drive y corre la cadena completa (sync_cartera.py →
-// cruzar.py → cruzar_cartera_preventiva.py) vía /api/cruce/trigger, el mismo
-// proxy que ya usaba "Actualizar cruce". Vive acá, junto al banner de staging,
-// porque es donde se ve el resultado: si el Excel traía cartera nueva, queda en
-// staging esperando a "Cargar Cartera" (este botón NO activa nada).
+// Solo pregunta a Drive si llegó cartera nueva: corre sync_cartera.py y nada
+// más (~4 s) vía /api/cartera-preventiva/sync. NO recalcula el cruce — eso
+// sigue siendo "Actualizar cruce" (/api/cruce/trigger, ~3 min). Vive acá, junto
+// al banner de staging, porque es donde se ve el resultado: si el Excel traía
+// cartera nueva, queda en staging esperando a "Cargar Cartera" (este botón NO
+// activa nada). El polling sigue siendo el de /api/cruce/trigger/status: el
+// sync comparte el carril del pipeline, así que se reporta ahí igual.
 function BuscarArchivosButton({ onDone }: { onDone: () => Promise<number | null> }) {
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState("");
@@ -92,7 +94,7 @@ function BuscarArchivosButton({ onDone }: { onDone: () => Promise<number | null>
       const statusRes  = await fetch("/api/cruce/trigger/status");
       const statusJson = await statusRes.json();
       if (statusJson.status !== "running") {
-        const res  = await fetch("/api/cruce/trigger", { method: "POST" });
+        const res  = await fetch("/api/cartera-preventiva/sync", { method: "POST" });
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "No se pudo iniciar la búsqueda");
       }
@@ -108,7 +110,7 @@ function BuscarArchivosButton({ onDone }: { onDone: () => Promise<number | null>
       <button
         onClick={handleClick}
         disabled={running}
-        title="Baja los archivos nuevos de Drive y recalcula. No activa la cartera: eso sigue siendo 'Cargar Cartera'."
+        title="Revisa si hay cartera nueva en Drive y la deja en espera. No recalcula el cruce ni activa la cartera: eso sigue siendo 'Cargar Cartera'."
         className="flex items-center gap-1.5 bg-emerald-600 text-white text-sm px-3.5 py-1.5 rounded-full shadow-sm hover:bg-emerald-700 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-60"
       >
         <svg className={`w-4 h-4 ${running ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -116,7 +118,7 @@ function BuscarArchivosButton({ onDone }: { onDone: () => Promise<number | null>
         </svg>
         {running ? "Buscando..." : "Buscar archivos nuevos"}
       </button>
-      {running && <span className="text-[11px] text-gray-500">Esto puede tardar varios minutos</span>}
+      {running && <span className="text-[11px] text-gray-500">Revisando Drive...</span>}
       {message && !running && <span className="text-[11px] text-gray-600 max-w-xs text-right">{message}</span>}
       {error && <span className="text-[11px] text-red-600 max-w-xs text-right whitespace-pre-wrap">{error}</span>}
     </div>

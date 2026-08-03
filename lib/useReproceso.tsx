@@ -106,11 +106,30 @@ export function useReproceso(onDone?: () => void) {
     return () => { cancelled = true; };
   }, [startPolling]);
 
-  /** `clave` identifica la fila tocada (llave, matching_key, documento…) para marcarla. */
-  const fireTrigger = useCallback((clave?: string) => {
+  /**
+   * `clave` identifica la fila tocada (llave, matching_key, documento…) SOLO para marcarla en
+   * pantalla. `opciones.matchingKey` es otra cosa: le dice al pipeline que reprocese ese único
+   * pago (~10-12 s en vez de ~29 s).
+   *
+   * Son parámetros distintos a propósito, no se puede reusar `clave`: mandar la llave de una
+   * cuota (`3339PN46237`) como si fuera un pago haría que el pipeline no encuentre nada, aborte,
+   * y el cambio del usuario se quede sin recalcular.
+   *
+   * `matchingKey` va solo en acciones sobre UN pago de `cruce_cartera` (corregir documento,
+   * descartar número, marcar/desmarcar un apartado). NUNCA en acciones sobre una cuota (cerrar
+   * cuota o cartera, valor de cuota, agregar cuota, asociar saldo, descartar pago): el modo
+   * puntual de `cruzar.py` no toca la cartera preventiva de nadie más, así que acotarlo dejaría
+   * el resto del efecto sin aplicar. Ante la duda, no mandarlo — omitirlo es el comportamiento
+   * de siempre, correcto aunque lento.
+   */
+  const fireTrigger = useCallback((clave?: string, opciones?: { matchingKey?: string }) => {
     setReprocesando(true);
     if (clave) setRecalculando((prev) => new Set(prev).add(clave));
-    fetch("/api/cruce/reproceso", { method: "POST" })
+    fetch("/api/cruce/reproceso", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(opciones?.matchingKey ? { matching_key: opciones.matchingKey } : {}),
+    })
       .then((res) => {
         if (!res.ok) throw new Error();
         startPolling();

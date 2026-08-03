@@ -306,7 +306,8 @@ export default function TransactionsView() {
       setData((prev) => prev.map((r) => r.matching_key === row.matching_key ? { ...r, categoria: tipo } : r));
       setRowMessage((prev) => ({ ...prev, [row.matching_key]: "Marcado. Sale del proceso en el próximo cruce." }));
       setOtrosPanelOpen((prev) => ({ ...prev, [row.matching_key]: false }));
-      fireTrigger(row.matching_key);
+      // Acción sobre UN pago → reproceso puntual (spec "Reproceso de un solo pago").
+      fireTrigger(row.matching_key, { matchingKey: row.matching_key });
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
@@ -327,7 +328,8 @@ export default function TransactionsView() {
       if (wasCesantias && row.transaction_code_1) {
         setRemovePatternOffer((prev) => ({ ...prev, [row.matching_key]: row.transaction_code_1 }));
       }
-      fireTrigger(row.matching_key);
+      // Acción sobre UN pago → reproceso puntual.
+      fireTrigger(row.matching_key, { matchingKey: row.matching_key });
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {

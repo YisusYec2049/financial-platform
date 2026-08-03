@@ -234,7 +234,8 @@ export default function PagosApartadosView() {
       // que quedó bien. El refetch de onDone se la lleva.
       setDesmarcadas((prev) => new Set(prev).add(row.matching_key));
       setRowMessage((prev) => ({ ...prev, [row.matching_key]: "Desmarcado. Vuelve al flujo normal al terminar el recálculo." }));
-      fireTrigger(row.matching_key);
+      // Acción sobre UN pago → reproceso puntual (spec "Reproceso de un solo pago").
+      fireTrigger(row.matching_key, { matchingKey: row.matching_key });
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
     } finally {
