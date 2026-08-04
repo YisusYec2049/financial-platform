@@ -1525,10 +1525,9 @@ export default function CarteraPreventivaView() {
                   const cuotaValue = cuotaEdits[row.llave] ?? formatMonto(row.valor_cuota);
                   const cuotaChanged = cuotaValue.trim() !== "" && parseMonto(cuotaValue) !== row.valor_cuota && !Number.isNaN(parseMonto(cuotaValue));
                   const puedeAsociar = multiInscripcionDocs.has(row.cruce_access);
-                  // Regla #4/#7: mensaje + botón de asociar saldo a favor —
-                  // no en la cuota que originó el saldo (esa ya muestra su
-                  // propio badge "Saldo a favor"), solo en las que necesitan
-                  // dinero (pendiente o pago parcial).
+                  // Regla #4/#7: mensaje + botón de asociar saldo a favor,
+                  // solo en las cuotas que necesitan dinero (pendiente o pago
+                  // parcial).
                   // Unión de las dos señales, sin repetir un saldo que caiga por ambas.
                   const porDoc    = saldosPorDocumento.get((row.cruce_access || "").trim()) || [];
                   const porCorreo = saldosPorCorreo.get((row.correo || "").trim().toLowerCase()) || [];
@@ -1539,11 +1538,20 @@ export default function CarteraPreventivaView() {
                     ? { total: saldosDeLaFila.reduce((a, s) => a + Number(s.disponible), 0),
                         rows:  saldosDeLaFila }
                     : undefined;
-                  const esOrigenSaldo = !!grupo?.rows.some((s) => s.llave_origen === row.llave);
                   const necesitaDinero = pendiente || parcial;
+                  // El botón NO se esconde por haber originado el saldo: si la cuota
+                  // necesita dinero, tiene que poder recibirlo, venga de donde venga.
+                  // (Antes había un `!esOrigenSaldo` aquí, para no ofrecerlo en la
+                  // cuota que ya muestra su badge "Saldo a favor" — pero ese badge
+                  // exige fecha_pago + diferencia > 0, o sea que `necesitaDinero` ya
+                  // es false ahí. Lo único que bloqueaba de más eran las cuotas que
+                  // originaron un saldo y quedaron debiendo: desde el 3/8 el pipeline
+                  // ya no pinta la plata descartada sobre su cuota de origen, así que
+                  // esas quedaban sin badge Y sin botón — con descartes en dos cuotas
+                  // del mismo documento, ninguna podía recibir la plata.)
                   // ...y no en una línea de deuda cuya cuota original siga abierta:
                   // ahí la plata va en la original, si no se pagaría dos veces.
-                  const puedeAsociarSaldo = !!grupo && grupo.total > 0 && !esOrigenSaldo && necesitaDinero
+                  const puedeAsociarSaldo = !!grupo && grupo.total > 0 && necesitaDinero
                                             && !row.original_abierta;
                   const cuotaRestante = pendiente ? row.valor_a_cobrar : Math.abs(row.diferencia ?? 0);
                   // Regla #3: descartar solo tiene sentido sobre un pago real
