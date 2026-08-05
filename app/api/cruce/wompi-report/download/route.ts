@@ -64,12 +64,57 @@ export async function GET(req: NextRequest) {
     return true;
   });
 
+  // El INCP no está en el consolidado. El pedido es traerlo "venga de donde venga":
+  // NO se filtra por estado del cruce — hay pagos `pendiente` (Excepciones) con INCP
+  // puesto a mano, y si solo se leyeran los `cruzado` el reporte los mostraría vacíos
+  // (medidos 5 en el histórico). Y los pagos apartados se BORRAN de cruce_cartera a
+  // propósito, así que su INCP solo puede salir de pagos_apartados.incp_resuelto.
+  //
+  // Nunca se deduce ni se rellena: si no hay dato, la celda va vacía.
+  const llaves = deduped.map((r) => r.matching_key as string);
+  const incpPorPago = new Map<string, string>();
+
+  // Por lotes: un .in() con mil llaves puede volver cortado SIN error (la misma
+  // trampa que la paginación). Y se pasa el arreglo a .in(), nunca interpolado
+  // dentro de un .or(): postgrest-js entrecomilla solo las llaves con paréntesis
+  // (`… (duplicado)`), que en un string de filtros romperían la consulta.
+  for (let i = 0; i < llaves.length; i += 200) {
+    const lote = llaves.slice(i, i + 200);
+
+    const { data: cruce, error: cruceError } = await supabase
+      .from("cruce_cartera")
+      .select("matching_key, incp")
+      .in("matching_key", lote);
+    if (cruceError) return NextResponse.json({ error: cruceError.message }, { status: 500 });
+    for (const r of cruce ?? []) {
+      if (r.incp) incpPorPago.set(r.matching_key as string, r.incp as string);
+    }
+
+    const { data: apartados, error: apartadosError } = await supabase
+      .from("pagos_apartados")
+      .select("matching_key, incp_resuelto")
+      .in("matching_key", lote);
+    if (apartadosError) return NextResponse.json({ error: apartadosError.message }, { status: 500 });
+    for (const r of apartados ?? []) {
+      // cruce_cartera manda si el pago estuviera en las dos.
+      if (r.incp_resuelto && !incpPorPago.has(r.matching_key as string)) {
+        incpPorPago.set(r.matching_key as string, r.incp_resuelto as string);
+      }
+    }
+  }
+
+  // Vacío es "", no null: en el Excel se ven igual, pero el CSV escribiría "null".
+  const conIncp = deduped.map((r) => ({
+    ...r,
+    incp: incpPorPago.get(r.matching_key as string) ?? "",
+  }));
+
   await logAudit({
     user_email: user.email ?? "unknown",
     action: "download",
     filters: { regFrom, regTo, view: "wompi_report" },
-    result_count: deduped.length,
+    result_count: conIncp.length,
   });
 
-  return NextResponse.json({ data: deduped, count: deduped.length, truncated });
+  return NextResponse.json({ data: conIncp, count: conIncp.length, truncated });
 }

@@ -369,7 +369,7 @@ export default function CruceView() {
       // Una sola columna legible al frente. `metodo_de_pago` la llena el pipeline en
       // cada corrida para todos los WOMPI; si viene vacía es que aún no ha corrido
       // sobre ese pago, y se deja vacía en vez de adivinar.
-      const enriched = rows.map((r) => {
+      const enriched = rows.map(({ incp, ...r }) => {
         const esAutomatico = r.metodo_de_pago === "WOMPI (Genera Link)";
         return {
           "Método WOMPI": esAutomatico
@@ -377,6 +377,15 @@ export default function CruceView() {
             : r.metodo_de_pago === "PAGOS MANUALES"
             ? "Manual"
             : "",
+          // El INCP lo pega la ruta desde cruce_cartera (cualquier estado) o, para los
+          // apartados, desde pagos_apartados.incp_resuelto. Vacío cuando no hay dato.
+          //
+          // `incp` se saca del spread a propósito: NO es una columna del consolidado
+          // sino un añadido de la ruta, así que dejarlo pasar sacaría la misma cadena
+          // dos veces en el Excel, como "INCP" y como "incp". Distinto de
+          // `metodo_de_pago`, que sí es columna real y se conserva cruda al lado de su
+          // versión legible.
+          INCP: incp ?? "",
           ...r,
           // Pedido del área (5/8): en los automáticos el Programa sale solo con su
           // código. Se corta en el PRIMER " - " (con espacios: sin ellos, un código
