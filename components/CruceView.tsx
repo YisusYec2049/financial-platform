@@ -369,15 +369,30 @@ export default function CruceView() {
       // Una sola columna legible al frente. `metodo_de_pago` la llena el pipeline en
       // cada corrida para todos los WOMPI; si viene vacía es que aún no ha corrido
       // sobre ese pago, y se deja vacía en vez de adivinar.
-      const enriched = rows.map((r) => ({
-        "Método WOMPI":
-          r.metodo_de_pago === "PAGOS MANUALES"
-            ? "Manual"
-            : r.metodo_de_pago === "WOMPI (Genera Link)"
+      const enriched = rows.map((r) => {
+        const esAutomatico = r.metodo_de_pago === "WOMPI (Genera Link)";
+        return {
+          "Método WOMPI": esAutomatico
             ? "Automático"
+            : r.metodo_de_pago === "PAGOS MANUALES"
+            ? "Manual"
             : "",
-        ...r,
-      }));
+          ...r,
+          // Pedido del área (5/8): en los automáticos el Programa sale solo con su
+          // código. Se corta en el PRIMER " - " (con espacios: sin ellos, un código
+          // con guion interno se partiría por la mitad), porque hay nombres de
+          // catálogo que traen dos — "DPWBI47 - Dip. en Power BI - Análisis y
+          // Visualización…". Va DESPUÉS del spread o `...r` lo pisa con el valor
+          // original; como la clave ya existe en `r`, el orden de columnas no cambia.
+          //
+          // Los manuales NO se tocan: ahí el Programa sale de `ref. 2` del CSV, que
+          // es texto libre de quien paga. Hoy 237 de 927 traen el formato por copiar
+          // y pegar del catálogo, pero nadie lo garantiza — el día que alguien
+          // escriba "Pago cuota 2 - agosto", el reporte diría que el programa es
+          // "Pago cuota 2".
+          program: esAutomatico ? String(r.program ?? "").split(" - ")[0].trim() : r.program,
+        };
+      });
       if (format === "excel") buildXlsx(enriched, `wompi_del_dia_${rt}.xlsx`, "WOMPI del día");
       else buildCsv(enriched, `wompi_del_dia_${rt}.csv`);
     } catch (err) {
