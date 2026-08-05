@@ -67,6 +67,12 @@ export async function GET(req: NextRequest) {
 
   query = query
     .order("payment_date", { ascending: false })
+    // Desempate obligatorio: sin una columna única al final del orden, las páginas
+    // dejan de ser un corte estable — unas filas salen en dos páginas y otras no
+    // salen en ninguna. Medido el 2026-08-05 pasando página por página: se veían
+    // 1.231 de 1.273 pagos, o sea que había decenas que NADIE podía ver desde la
+    // pantalla (el número cambia en cada medición, según cómo caigan los empates).
+    .order("matching_key", { ascending: true })
     .range(offset, offset + pageSize - 1);
 
   const { data, error, count } = await query;

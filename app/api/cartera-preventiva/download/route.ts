@@ -39,6 +39,12 @@ export async function GET(req: NextRequest) {
       .from("cartera_preventiva_v")
       .select("*")
       .order("fecha_vencimiento", { ascending: true })
+      // Desempate obligatorio: sin él se pierden filas EN SILENCIO. Hay 227 cuotas
+      // con la misma fecha de vencimiento, y cuando el orden empata Postgres no
+      // garantiza el mismo reparto en cada consulta: en el corte entre lotes unas
+      // filas vienen dos veces (el dedup las descarta) y otras no vienen nunca.
+      // Medido el 2026-08-05: esta descarga entregaba 3.017 de 3.032.
+      .order("id", { ascending: true })
       .range(from, from + batchSize - 1);
 
     if (search) {

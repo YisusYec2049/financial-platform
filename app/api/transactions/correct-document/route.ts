@@ -5,11 +5,23 @@ import { logAudit } from "@/lib/audit";
 
 // Documento editable (§2.3 consolidado / §3.3 excepciones): corrige el campo
 // identification de una transacción puntual (ej. NIT sin dígito de
-// verificación) y deja constancia POR DOCUMENTO en documento_correcciones,
-// para que matching-test corrija sola cualquier transacción futura con el
-// mismo documento_original. No recalculamos matching_key (esta app no conoce
-// el algoritmo de cada banco) — matching_key_nuevo se guarda igual al
-// original porque la llave no cambia, solo el documento.
+// verificación) y deja constancia en documento_correcciones.
+//
+// ⚠️ La corrección vale SOLO para este pago (matching_key_original). Hasta el
+// 5 de agosto de 2026 valía "por número" — quedaba la orden de cambiar ese
+// documento en cualquier pago, para siempre — y el pipeline la quitó porque
+// rompió en producción: le escribió el documento de una persona al pago de
+// otra, y la orden vieja seguía pisando el número en cada corrida, así que no
+// se podía revertir. Lo que reemplaza esa memoria es la sugerencia que muestran
+// las vistas (GET /api/transactions/document-history): se le enseña a la persona
+// lo que ya se corrigió antes y ella decide.
+//
+// El insert deja UNA fila por corrección a propósito: ese historial es lo que
+// alimenta la sugerencia. No convertirlo en upsert — se perdería.
+//
+// No recalculamos matching_key (esta app no conoce el algoritmo de cada banco)
+// — matching_key_nuevo se guarda igual al original porque la llave no cambia,
+// solo el documento.
 export async function POST(req: NextRequest) {
   const { user, response } = await requireAuth(req);
   if (response) return response;

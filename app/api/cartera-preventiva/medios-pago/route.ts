@@ -19,6 +19,10 @@ export async function GET(req: NextRequest) {
     const { data, error } = await supabase
       .from("cartera_preventiva")
       .select("medio_pago")
+      // Sin ORDER BY, Postgres puede cambiar de reparto entre un lote y el
+      // siguiente y perder filas: acá eso sería un medio de pago que desaparece
+      // del dropdown sin explicación.
+      .order("id", { ascending: true })
       .range(from, from + BATCH - 1);
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });

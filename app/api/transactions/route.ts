@@ -68,6 +68,9 @@ export async function GET(req: NextRequest) {
 
   query = query
     .order("registration_date", { ascending: false })
+    // Desempate obligatorio (ver GET /api/cruce): sin columna única al final del
+    // orden, hay filas que no salen en ninguna página. `id` es la PK.
+    .order("id", { ascending: true })
     .range(offset, offset + pageSize - 1);
 
   const { data, error, count } = await query;

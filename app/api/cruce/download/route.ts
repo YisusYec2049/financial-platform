@@ -34,6 +34,10 @@ export async function GET(req: NextRequest) {
       // Mismo criterio que GET /api/cruce (ver comentario allí): solo cruzadas.
       .eq("estado_cruce", "cruzado")
       .order("payment_date", { ascending: false })
+      // Desempate obligatorio (ver comentario en cartera-preventiva/download):
+      // sin una columna única al final del orden, el corte entre lotes pierde
+      // filas sin error y sin aviso. matching_key es la PK de cruce_cartera.
+      .order("matching_key", { ascending: true })
       .range(from, from + batchSize - 1);
 
     if (search) {

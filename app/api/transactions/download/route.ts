@@ -46,6 +46,11 @@ export async function GET(req: NextRequest) {
       .from("consolidated_transactions")
       .select("*")
       .order("registration_date", { ascending: false })
+      // Desempate obligatorio (ver cartera-preventiva/download): sin columna única
+      // al final del orden, el corte entre lotes pierde filas en silencio. Hoy esta
+      // descarga entrega el total exacto, pero por cómo caen los empates, no porque
+      // esté sana. `id` es la PK.
+      .order("id", { ascending: true })
       .range(from, from + batchSize - 1);
 
     if (categoria === "normal" && categoriaKeys && categoriaKeys.length > 0) {

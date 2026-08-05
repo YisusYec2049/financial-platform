@@ -5,6 +5,8 @@ import Link from "next/link";
 import * as XLSX from "xlsx";
 import { useSessionState } from "@/lib/useSessionState";
 import { useReproceso } from "@/lib/useReproceso";
+import { useDocumentHistory } from "@/lib/useDocumentHistory";
+import DocumentHistoryHint from "@/components/DocumentHistoryHint";
 
 type Transaction = {
   id: string;
@@ -75,6 +77,8 @@ export default function TransactionsView() {
   const abortControllerRef                = useRef<AbortController | null>(null);
   const tableContainerRef                 = useRef<HTMLDivElement>(null);
 
+  const { correcciones, cargarHistorial } = useDocumentHistory();
+
   const PAGE_SIZE = 100;
 
   const fetchMethods = useCallback(async () => {
@@ -124,13 +128,14 @@ export default function TransactionsView() {
       setTotal(json.count || 0);
       setLastUpdate(new Date());
       setNewRecords(false);
+      cargarHistorial(json.data || []);
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
       setFetchError(err instanceof Error ? err.message : "Error inesperado");
     } finally {
       setLoading(false);
     }
-  }, [search, paymentMethod, regFrom, regTo, payFrom, payTo, categoria]);
+  }, [search, paymentMethod, regFrom, regTo, payFrom, payTo, categoria, cargarHistorial]);
 
   useEffect(() => {
     fetchMethods();
@@ -372,7 +377,9 @@ export default function TransactionsView() {
         delete next[row.matching_key];
         return next;
       });
-      setRowMessage((prev) => ({ ...prev, [row.matching_key]: "Documento corregido. Se recuerda para pagos futuros con el mismo documento." }));
+      // Una corrección vale SOLO para este pago: el pipeline dejó de recordarlas
+      // por número (aplicarlas a ciegas le pisó el documento a otra persona).
+      setRowMessage((prev) => ({ ...prev, [row.matching_key]: "Documento corregido para este pago. Se aplicará al terminar el recálculo." }));
       // Acción sobre UN pago → reproceso puntual (spec "Reproceso de un solo pago").
       fireTrigger(row.matching_key, { matchingKey: row.matching_key });
     } catch (err) {
@@ -601,33 +608,41 @@ export default function TransactionsView() {
                   <tr key={row.id} className="hover:bg-gray-50/70 transition-colors duration-100 align-top">
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.registration_date)}</td>
                     <td className="px-4 py-2.5">
-                      <div className="flex items-center gap-1">
-                        {row.alerta_posible_doble_cobro && (
-                          <span title="Mismo documento, mismo día y mismo monto: posible doble cobro" className="text-red-600 text-xs">⚠️</span>
-                        )}
-                        {!row.alerta_posible_doble_cobro && row.alerta_documento_repetido && (
-                          <span title="Este documento tiene más de un pago el mismo día" className="text-amber-600 text-xs">⚠️</span>
-                        )}
-                        {row.matching_key?.endsWith("(duplicado)") && (
-                          <span title="Llave duplicada: Bancolombia generó la misma llave para dos pagos el mismo día" className="text-purple-600 text-xs">⚠️</span>
-                        )}
-                        <input
-                          type="text"
-                          value={docValue}
-                          onChange={(e) => setDocEdits((prev) => ({ ...prev, [row.matching_key]: e.target.value }))}
-                          disabled={saving}
-                          className="w-28 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
-                        />
-                        {docChanged && (
-                          <button
-                            onClick={() => handleSaveDocumento(row)}
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-1">
+                          {row.alerta_posible_doble_cobro && (
+                            <span title="Mismo documento, mismo día y mismo monto: posible doble cobro" className="text-red-600 text-xs">⚠️</span>
+                          )}
+                          {!row.alerta_posible_doble_cobro && row.alerta_documento_repetido && (
+                            <span title="Este documento tiene más de un pago el mismo día" className="text-amber-600 text-xs">⚠️</span>
+                          )}
+                          {row.matching_key?.endsWith("(duplicado)") && (
+                            <span title="Llave duplicada: Bancolombia generó la misma llave para dos pagos el mismo día" className="text-purple-600 text-xs">⚠️</span>
+                          )}
+                          <input
+                            type="text"
+                            value={docValue}
+                            onChange={(e) => setDocEdits((prev) => ({ ...prev, [row.matching_key]: e.target.value }))}
                             disabled={saving}
-                            title="Guardar corrección de documento"
-                            className="text-xs px-1.5 py-1 rounded-lg bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
-                          >
-                            ✓
-                          </button>
-                        )}
+                            className="w-28 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                          />
+                          {docChanged && (
+                            <button
+                              onClick={() => handleSaveDocumento(row)}
+                              disabled={saving}
+                              title="Guardar corrección de documento"
+                              className="text-xs px-1.5 py-1 rounded-lg bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                            >
+                              ✓
+                            </button>
+                          )}
+                        </div>
+                        <DocumentHistoryHint
+                          matchingKey={row.matching_key}
+                          documento={row.identification}
+                          correcciones={correcciones}
+                          onSugerencia={(doc) => setDocEdits((prev) => ({ ...prev, [row.matching_key]: doc }))}
+                        />
                       </div>
                     </td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.payment_date)}</td>

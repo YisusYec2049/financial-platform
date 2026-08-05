@@ -19,7 +19,13 @@ import { sanitizeSearch } from "@/lib/search";
 // La pantalla filtrada ES la revisión: no se filtra por diferencia, se cierra todo
 // lo que esté ahí (los faltantes grandes no llegan a aparecer, el pipeline ya les
 // abrió una cuota nueva; y la plata que sobra vive aparte en cartera_saldos_favor).
+// ⚠️ Se trae por lotes, NO con .limit(MAX_ROWS). PostgREST devuelve como máximo
+// 1.000 filas por respuesta y NO avisa: pedir 5.000 o 50.000 devuelve 1.000 las
+// dos veces (comprobado el 2026-08-05). Como este endpoint decide QUÉ cuotas
+// cierra, un cierre de un rango largo habría cerrado 1.000 y dicho que terminó —
+// el modo de fallar que ya costó caro acá: "dice que sí y no hace nada".
 const MAX_ROWS = 5000;
+const BATCH = 1000;
 
 type Fila = {
   llave: string;
@@ -69,49 +75,63 @@ export async function POST(req: NextRequest) {
   // este endpoint decide QUÉ cuotas cierra, así que si su consulta no coincidiera con
   // la de la vista escribiría plata sobre un conjunto distinto del que la persona ve.
   // Los `update` de más abajo siguen apuntando a la tabla — en una vista no se escribe.
-  const base = supabase.from("cartera_preventiva_v").select("*");
-  let query: typeof base = base.not("valor_pago", "is", null);
+  // Se reconstruye entera en cada lote: un builder de supabase-js ya ejecutado no
+  // se reutiliza para pedir el rango siguiente.
+  const construirConsulta = () => {
+    const base = supabase.from("cartera_preventiva_v").select("*");
+    let query: typeof base = base.not("valor_pago", "is", null);
 
-  // El filtro "Día del Cruce" de la pantalla manda. La vista siempre lo envía en el
-  // cuerpo; hasta el 2026-08-03 este endpoint no lo leía y cerraba SIEMPRE lo de hoy,
-  // así que querer cerrar lo del viernes respondía "0 cuotas" — que se lee como
-  // confirmación, no como "no hice nada".
-  // El `else` no es opcional: sin filtro puesto el botón tiene que seguir alcanzando
-  // solo el día de hoy. Si cerrara todos los días, la rutina de cada mañana arrastraría
-  // cuotas viejas sin que nadie lo pida.
-  if (cruceFrom || cruceTo) {
-    if (cruceFrom) query = query.gte("fecha_cruce", cruceFrom);
-    if (cruceTo)   query = query.lte("fecha_cruce", cruceTo);
-  } else {
-    query = query.eq("fecha_cruce", hoy);
+    // El filtro "Día del Cruce" de la pantalla manda. La vista siempre lo envía en el
+    // cuerpo; hasta el 2026-08-03 este endpoint no lo leía y cerraba SIEMPRE lo de hoy,
+    // así que querer cerrar lo del viernes respondía "0 cuotas" — que se lee como
+    // confirmación, no como "no hice nada".
+    // El `else` no es opcional: sin filtro puesto el botón tiene que seguir alcanzando
+    // solo el día de hoy. Si cerrara todos los días, la rutina de cada mañana arrastraría
+    // cuotas viejas sin que nadie lo pida.
+    if (cruceFrom || cruceTo) {
+      if (cruceFrom) query = query.gte("fecha_cruce", cruceFrom);
+      if (cruceTo)   query = query.lte("fecha_cruce", cruceTo);
+    } else {
+      query = query.eq("fecha_cruce", hoy);
+    }
+
+    if (search) query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%,codigo_transaccion_1.ilike.%${search}%,inscrip.ilike.%${search}%`);
+    if (estado === "resuelta") query = query.not("fecha_pago", "is", null);
+    else if (estado === "pendiente") query = query.is("fecha_pago", null);
+    if (vencFrom) query = query.gte("fecha_vencimiento", vencFrom);
+    if (vencTo)   query = query.lte("fecha_vencimiento", vencTo);
+    if (pagoParcial) query = query.lt("diferencia", 0);
+    if (medioPago) {
+      query = medioPago.endsWith("%")
+        ? query.ilike("medio_pago", medioPago)
+        : query.eq("medio_pago", medioPago);
+    }
+    if (payFrom) query = query.gte("fecha_pago", payFrom);
+    if (payTo)   query = query.lte("fecha_pago", payTo);
+    // "Con notificación de pago de más": excluye 'FALTA DE PAGO', que es lo
+    // contrario (la cuota original de un pago parcial con faltante >= $50k lleva
+    // esa marca) y colaría aquí por ser una notificacion no nula.
+    if (conNotificacion) query = query.not("notificacion", "is", null).neq("notificacion", "").neq("notificacion", "FALTA DE PAGO");
+    if (wompiTipo === "automatico") query = query.eq("es_wompi_automatico", true);
+    else if (wompiTipo === "manual") query = query.eq("es_wompi_automatico", false);
+    // Ver comentario en GET /api/cartera-preventiva: cuenta cuotas, no renglones.
+    if (multiCuota) query = query.gt("cuotas_inscripcion", 1);
+
+    // Desempate obligatorio: sin una columna única al final del orden, el corte
+    // entre lotes pierde filas en silencio — y acá una fila perdida es una cuota
+    // que el cierre no alcanza, sin decirlo.
+    return query.order("id", { ascending: true });
+  };
+
+  const filas: Fila[] = [];
+  for (let from = 0; from < MAX_ROWS; from += BATCH) {
+    const batchSize = Math.min(BATCH, MAX_ROWS - from);
+    const { data, error } = await construirConsulta().range(from, from + batchSize - 1);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (!data || data.length === 0) break;
+    filas.push(...(data as Fila[]));
+    if (data.length < batchSize) break;
   }
-
-  if (search) query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%,codigo_transaccion_1.ilike.%${search}%,inscrip.ilike.%${search}%`);
-  if (estado === "resuelta") query = query.not("fecha_pago", "is", null);
-  else if (estado === "pendiente") query = query.is("fecha_pago", null);
-  if (vencFrom) query = query.gte("fecha_vencimiento", vencFrom);
-  if (vencTo)   query = query.lte("fecha_vencimiento", vencTo);
-  if (pagoParcial) query = query.lt("diferencia", 0);
-  if (medioPago) {
-    query = medioPago.endsWith("%")
-      ? query.ilike("medio_pago", medioPago)
-      : query.eq("medio_pago", medioPago);
-  }
-  if (payFrom) query = query.gte("fecha_pago", payFrom);
-  if (payTo)   query = query.lte("fecha_pago", payTo);
-  // "Con notificación de pago de más": excluye 'FALTA DE PAGO', que es lo
-  // contrario (la cuota original de un pago parcial con faltante >= $50k lleva
-  // esa marca) y colaría aquí por ser una notificacion no nula.
-  if (conNotificacion) query = query.not("notificacion", "is", null).neq("notificacion", "").neq("notificacion", "FALTA DE PAGO");
-  if (wompiTipo === "automatico") query = query.eq("es_wompi_automatico", true);
-  else if (wompiTipo === "manual") query = query.eq("es_wompi_automatico", false);
-  // Ver comentario en GET /api/cartera-preventiva: cuenta cuotas, no renglones.
-  if (multiCuota) query = query.gt("cuotas_inscripcion", 1);
-
-  const { data, error } = await query.limit(MAX_ROWS);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-  const filas = (data || []) as Fila[];
 
   // Filas que se saltan en silencio, para que darle dos veces no haga daño:
   // sin valor_pago (nada que copiar) y ya cerradas (pago_confirmado == valor_pago).

@@ -34,6 +34,10 @@ export async function GET(req: NextRequest) {
 
   query = query
     .order("fecha_marcada", { ascending: false })
+    // Desempate obligatorio (ver GET /api/cruce): sin columna única al final del
+    // orden, hay filas que no salen en ninguna página. pagos_apartados NO tiene
+    // `id`; su PK es matching_key.
+    .order("matching_key", { ascending: true })
     .range(offset, offset + pageSize - 1);
 
   const { data, error, count } = await query;

@@ -4,6 +4,8 @@ import { useEffect, useState, useCallback, useRef, useMemo, forwardRef, useImper
 import * as XLSX from "xlsx";
 import { useSessionState } from "@/lib/useSessionState";
 import { useReproceso } from "@/lib/useReproceso";
+import { useDocumentHistory } from "@/lib/useDocumentHistory";
+import DocumentHistoryHint from "@/components/DocumentHistoryHint";
 
 export type CruceExcepcionesViewRef = { refresh: () => void };
 
@@ -178,6 +180,8 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
   const tableContainerRef                 = useRef<HTMLDivElement>(null);
   const dropdownRef                       = useRef<HTMLDivElement>(null);
 
+  const { correcciones, cargarHistorial } = useDocumentHistory();
+
   const PAGE_SIZE = 100;
 
   const fetchMethods = useCallback(async () => {
@@ -249,13 +253,14 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
       setData(json.data || []);
       setTotal(json.count || 0);
       fetchNotes(json.data || []);
+      cargarHistorial(json.data || []);
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
       setFetchError(err instanceof Error ? err.message : "Error inesperado");
     } finally {
       setLoading(false);
     }
-  }, [search, excepcionMotivo, incpCorreo, paymentMethod, payFrom, payTo, regFrom, regTo, fetchNotes]);
+  }, [search, excepcionMotivo, incpCorreo, paymentMethod, payFrom, payTo, regFrom, regTo, fetchNotes, cargarHistorial]);
 
   useImperativeHandle(ref, () => ({
     refresh: () => fetchData(page),
@@ -794,6 +799,12 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                             </div>
                             {docMessage[row.matching_key] && <span className="text-[11px] text-green-700">{docMessage[row.matching_key]}</span>}
                             {docError[row.matching_key] && <span className="text-[11px] text-red-600">{docError[row.matching_key]}</span>}
+                            <DocumentHistoryHint
+                              matchingKey={row.matching_key}
+                              documento={row.identification}
+                              correcciones={correcciones}
+                              onSugerencia={(doc) => setDocEdits((prev) => ({ ...prev, [row.matching_key]: doc }))}
+                            />
                           </div>
                         );
                       })()}

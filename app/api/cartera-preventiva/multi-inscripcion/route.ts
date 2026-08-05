@@ -36,6 +36,13 @@ export async function GET(req: NextRequest) {
       .is("fecha_pago", null)
       .not("cruce_access", "is", null)
       .neq("cruce_access", "")
+      // Sin ORDER BY, Postgres puede devolver las filas como quiera y cambiar de
+      // reparto entre un lote y el siguiente: es el caso PEOR de la paginación,
+      // porque se pierden filas sin que haya siquiera un empate que lo explique.
+      // Y acá duele: este endpoint decide a qué documentos se les ofrece el botón
+      // "Asociar", así que una fila perdida es una persona a la que la pantalla no
+      // le ofrece asociar su pago, sin decir por qué.
+      .order("id", { ascending: true })
       .range(from, from + BATCH - 1);
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });

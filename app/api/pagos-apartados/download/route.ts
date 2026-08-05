@@ -28,6 +28,10 @@ export async function GET(req: NextRequest) {
       .from("pagos_apartados")
       .select("*")
       .order("fecha_marcada", { ascending: false })
+      // Desempate obligatorio (ver cartera-preventiva/download): sin columna única
+      // al final del orden, el corte entre lotes pierde filas en silencio.
+      // pagos_apartados NO tiene `id`; su PK es matching_key.
+      .order("matching_key", { ascending: true })
       .range(from, from + batchSize - 1);
 
     if (search) {

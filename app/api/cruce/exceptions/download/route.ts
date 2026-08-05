@@ -35,6 +35,9 @@ export async function GET(req: NextRequest) {
       .or("estado_cruce.eq.pendiente,estado_cruce.eq.no_identificable")
       .not("excepcion_motivo", "is", null)
       .order("payment_date", { ascending: false })
+      // Desempate obligatorio (ver cartera-preventiva/download): sin columna única
+      // al final del orden, el corte entre lotes pierde filas en silencio.
+      .order("matching_key", { ascending: true })
       .range(from, from + batchSize - 1);
 
     if (search) {

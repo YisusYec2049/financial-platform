@@ -64,6 +64,9 @@ export async function GET(req: NextRequest) {
 
   query = query
     .order("payment_date", { ascending: false })
+    // Desempate obligatorio (ver GET /api/cruce): sin columna única al final del
+    // orden, hay filas que no salen en ninguna página.
+    .order("matching_key", { ascending: true })
     .range(offset, offset + pageSize - 1);
 
   const { data, error, count } = await query;
