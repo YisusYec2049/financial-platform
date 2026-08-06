@@ -369,7 +369,7 @@ export default function CruceView() {
       // Una sola columna legible al frente. `metodo_de_pago` la llena el pipeline en
       // cada corrida para todos los WOMPI; si viene vacía es que aún no ha corrido
       // sobre ese pago, y se deja vacía en vez de adivinar.
-      const enriched = rows.map(({ incp, ...r }) => {
+      const enriched = rows.map(({ incp, ci, ...r }) => {
         const esAutomatico = r.metodo_de_pago === "WOMPI (Genera Link)";
         return {
           "Método WOMPI": esAutomatico
@@ -380,12 +380,18 @@ export default function CruceView() {
           // El INCP lo pega la ruta desde cruce_cartera (cualquier estado) o, para los
           // apartados, desde pagos_apartados.incp_resuelto. Vacío cuando no hay dato.
           //
-          // `incp` se saca del spread a propósito: NO es una columna del consolidado
-          // sino un añadido de la ruta, así que dejarlo pasar sacaría la misma cadena
-          // dos veces en el Excel, como "INCP" y como "incp". Distinto de
-          // `metodo_de_pago`, que sí es columna real y se conserva cruda al lado de su
-          // versión legible.
+          // `incp` y `ci` se sacan del spread a propósito: NO son columnas del
+          // consolidado sino añadidos de la ruta, así que dejarlos pasar sacaría la
+          // misma cadena dos veces en el Excel ("INCP" e "incp", "CI" y "ci").
+          // Distinto de `metodo_de_pago`, que sí es columna real y se conserva cruda
+          // al lado de su versión legible.
           INCP: incp ?? "",
+          // El CI sale de cruce_cartera.ci, que `cruzar.py` llena desde la columna
+          // "Comprobante" del ReportePagosWompi. Por eso solo lo traen los pagos
+          // automáticos: los manuales no figuran en ese reporte. Formato `CI-17632`,
+          // completo tal como se guarda — si el área lo quiere solo con el número,
+          // es recortar el prefijo aquí.
+          CI: ci ?? "",
           ...r,
           // Pedido del área (5/8): en los automáticos el Programa sale solo con su
           // código. Se corta en el PRIMER " - " (con espacios: sin ellos, un código

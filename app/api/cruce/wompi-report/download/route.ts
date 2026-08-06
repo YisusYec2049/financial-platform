@@ -70,9 +70,16 @@ export async function GET(req: NextRequest) {
   // (medidos 5 en el histórico). Y los pagos apartados se BORRAN de cruce_cartera a
   // propósito, así que su INCP solo puede salir de pagos_apartados.incp_resuelto.
   //
+  // El CI viaja en la misma consulta: lo llena `cruzar.py` desde la columna
+  // "Comprobante" del ReportePagosWompi, así que solo lo tienen los pagos
+  // automáticos. `pagos_apartados` NO tiene columna de CI (a diferencia del INCP,
+  // que ahí se escribe a mano), de modo que un pago apartado sale con la celda
+  // vacía y no hay de dónde recuperarlo.
+  //
   // Nunca se deduce ni se rellena: si no hay dato, la celda va vacía.
   const llaves = deduped.map((r) => r.matching_key as string);
   const incpPorPago = new Map<string, string>();
+  const ciPorPago = new Map<string, string>();
 
   // Por lotes: un .in() con mil llaves puede volver cortado SIN error (la misma
   // trampa que la paginación). Y se pasa el arreglo a .in(), nunca interpolado
@@ -83,11 +90,12 @@ export async function GET(req: NextRequest) {
 
     const { data: cruce, error: cruceError } = await supabase
       .from("cruce_cartera")
-      .select("matching_key, incp")
+      .select("matching_key, incp, ci")
       .in("matching_key", lote);
     if (cruceError) return NextResponse.json({ error: cruceError.message }, { status: 500 });
     for (const r of cruce ?? []) {
       if (r.incp) incpPorPago.set(r.matching_key as string, r.incp as string);
+      if (r.ci)   ciPorPago.set(r.matching_key as string, r.ci as string);
     }
 
     const { data: apartados, error: apartadosError } = await supabase
@@ -107,6 +115,7 @@ export async function GET(req: NextRequest) {
   const conIncp = deduped.map((r) => ({
     ...r,
     incp: incpPorPago.get(r.matching_key as string) ?? "",
+    ci:   ciPorPago.get(r.matching_key as string) ?? "",
   }));
 
   await logAudit({
