@@ -249,6 +249,7 @@ export default function CarteraPreventivaView() {
   const [cierreOpen, setCierreOpen]             = useState<Record<string, boolean>>({});
   const [cierreFecha, setCierreFecha]           = useState<Record<string, string>>({});
   const [cuotaEdits, setCuotaEdits]             = useState<Record<string, string>>({});
+  const [vencEdits, setVencEdits]               = useState<Record<string, string>>({});
   const [rowSaving, setRowSaving]               = useState<string | null>(null);
   const [rowMessage, setRowMessage]             = useState<Record<string, string>>({});
   const [rowError, setRowError]                 = useState<Record<string, string>>({});
@@ -788,6 +789,35 @@ export default function CarteraPreventivaView() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al guardar el valor de cuota");
       setRowMessage((prev) => ({ ...prev, [row.llave]: "Valor de cuota corregido. Se refleja al terminar el recálculo." }));
+      fireTrigger(row.llave);
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setRowSaving(null);
+    }
+  };
+
+  // La fecha corregida NO mueve plata ya aplicada: un pago se reparte una sola
+  // vez en su vida (queda en pago_asociaciones). Lo que sí hace es ordenar los
+  // pagos que entren DESPUÉS — el reparto llena siempre la cuota que vence
+  // primero. Mover plata ya aplicada es a mano: descartar el pago y asociarlo
+  // en la otra cuota.
+  // Sin validar que la fecha sea futura ni que respete el orden de las demás
+  // cuotas: corregir hacia atrás (10/09 → 10/08) es justamente el caso real.
+  const handleSaveFechaVencimiento = async (row: CarteraPreventivaRow) => {
+    const nueva = (vencEdits[row.llave] ?? "").trim();
+    if (!nueva || nueva === row.fecha_vencimiento) return;
+    setRowSaving(row.llave);
+    setRowError((prev) => ({ ...prev, [row.llave]: "" }));
+    try {
+      const res  = await fetch("/api/cartera-preventiva/overrides", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ llave: row.llave, fecha_vencimiento_manual: nueva }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al guardar la fecha de vencimiento");
+      setRowMessage((prev) => ({ ...prev, [row.llave]: "Fecha de vencimiento corregida. Se refleja al terminar el recálculo." }));
       fireTrigger(row.llave);
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
@@ -1524,6 +1554,12 @@ export default function CarteraPreventivaView() {
                   const saving = rowSaving === row.llave;
                   const cuotaValue = cuotaEdits[row.llave] ?? formatMonto(row.valor_cuota);
                   const cuotaChanged = cuotaValue.trim() !== "" && parseMonto(cuotaValue) !== row.valor_cuota && !Number.isNaN(parseMonto(cuotaValue));
+                  // <input type="date"> entrega YYYY-MM-DD, el mismo formato que
+                  // guarda la columna `date` — no pasar por Date(), que
+                  // interpreta ese string en UTC y en Colombia devuelve el día
+                  // anterior.
+                  const vencValue   = vencEdits[row.llave] ?? row.fecha_vencimiento ?? "";
+                  const vencChanged = vencValue.trim() !== "" && vencValue !== row.fecha_vencimiento;
                   const puedeAsociar = multiInscripcionDocs.has(row.cruce_access);
                   // Regla #4/#7: mensaje + botón de asociar saldo a favor,
                   // solo en las cuotas que necesitan dinero (pendiente o pago
@@ -1570,7 +1606,27 @@ export default function CarteraPreventivaView() {
                     </td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cliente)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.moneda)}</td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.fecha_vencimiento)}</td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="date"
+                          value={vencValue}
+                          onChange={(e) => setVencEdits((prev) => ({ ...prev, [row.llave]: e.target.value }))}
+                          disabled={saving}
+                          className="w-36 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                        />
+                        {vencChanged && (
+                          <button
+                            onClick={() => handleSaveFechaVencimiento(row)}
+                            disabled={saving}
+                            title="Guardar corrección de fecha de vencimiento"
+                            className="text-xs px-1.5 py-1 rounded-lg bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                          >
+                            ✓
+                          </button>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-1">
                         <input

@@ -49,6 +49,11 @@ export async function POST(req: NextRequest) {
   if (typeof body?.valor_pago_manual === "number")      update.valor_pago_manual = body.valor_pago_manual;
   if (typeof body?.medio_pago_manual === "string")      update.medio_pago_manual = body.medio_pago_manual;
   if (typeof body?.valor_cuota_manual === "number")     update.valor_cuota_manual = body.valor_cuota_manual;
+  // Fecha de vencimiento corregida a mano: llega ya en YYYY-MM-DD desde el
+  // <input type="date">, que es lo que espera la columna `date`. La aplica el
+  // pipeline sobre la fila (igual que valor_cuota_manual) — esta app NUNCA
+  // escribe cartera_preventiva.fecha_vencimiento directo.
+  if (typeof body?.fecha_vencimiento_manual === "string") update.fecha_vencimiento_manual = body.fecha_vencimiento_manual;
   if (typeof body?.es_ultima_cuota === "boolean")       update.es_ultima_cuota = body.es_ultima_cuota;
 
   if (Object.keys(update).length === 1) {
