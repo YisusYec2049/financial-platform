@@ -369,7 +369,7 @@ export default function CruceView() {
       // Una sola columna legible al frente. `metodo_de_pago` la llena el pipeline en
       // cada corrida para todos los WOMPI; si viene vacía es que aún no ha corrido
       // sobre ese pago, y se deja vacía en vez de adivinar.
-      const enriched = rows.map(({ incp, ci, ...r }) => {
+      const enriched = rows.map(({ incp, ci, payment_time, ...r }) => {
         const esAutomatico = r.metodo_de_pago === "WOMPI (Genera Link)";
         return {
           "Método WOMPI": esAutomatico
@@ -406,6 +406,19 @@ export default function CruceView() {
           // escriba "Pago cuota 2 - agosto", el reporte diría que el programa es
           // "Pago cuota 2".
           program: esAutomatico ? String(r.program ?? "").split(" - ")[0].trim() : r.program,
+          // Pedido del área (11/8): la celda de Fecha Pago lleva fecha y hora.
+          // La hora la guarda `matching-test` en `consolidated_transactions.payment_time`
+          // desde el 11 de agosto, leída del CSV de WOMPI. Los pagos anteriores a esa
+          // fecha la tienen vacía y salen solo con el día — no se rellena ni se inventa.
+          //
+          // `payment_time` sale del spread por el mismo motivo que `incp` y `ci`: si se
+          // deja pasar, el Excel saca una columna suelta de más al final además de la
+          // fecha ya compuesta. Y la composición va DESPUÉS del `...r` o el valor
+          // original la pisa; como la clave ya existe en `r`, el orden de columnas no
+          // cambia.
+          payment_date: payment_time
+            ? `${r.payment_date} ${payment_time}`
+            : r.payment_date,
         };
       });
       if (format === "excel") buildXlsx(enriched, `wompi_del_dia_${rt}.xlsx`, "WOMPI del día");
