@@ -677,6 +677,11 @@ export default function CarteraPreventivaView() {
       fireTrigger(inscripcion.llave);
     } catch (err) {
       setAsociarError((prev) => ({ ...prev, [doc]: err instanceof Error ? err.message : "Error inesperado" }));
+      // El servidor revalida el sello y cuánto le queda al pago, así que un rechazo
+      // suele significar que este panel está desactualizado (otra pestaña, o el
+      // botón de al lado hace 14 segundos). Releer deja a la vista el estado real
+      // en vez de un panel que sigue ofreciendo plata que ya no está.
+      fetchAsociarData(doc);
     } finally {
       setRowSaving(null);
     }
