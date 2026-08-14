@@ -250,6 +250,7 @@ export default function CarteraPreventivaView() {
   const [cierreFecha, setCierreFecha]           = useState<Record<string, string>>({});
   const [cuotaEdits, setCuotaEdits]             = useState<Record<string, string>>({});
   const [vencEdits, setVencEdits]               = useState<Record<string, string>>({});
+  const [pagoEdits, setPagoEdits]               = useState<Record<string, string>>({});
   const [rowSaving, setRowSaving]               = useState<string | null>(null);
   const [rowMessage, setRowMessage]             = useState<Record<string, string>>({});
   const [rowError, setRowError]                 = useState<Record<string, string>>({});
@@ -823,6 +824,55 @@ export default function CarteraPreventivaView() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al guardar la fecha de vencimiento");
       setRowMessage((prev) => ({ ...prev, [row.llave]: "Fecha de vencimiento corregida. Se refleja al terminar el recálculo." }));
+      fireTrigger(row.llave);
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setRowSaving(null);
+    }
+  };
+
+  // El abono que trae el Excel (columna PAGO) corregido a mano. Cuando ese
+  // abono cubre la cuota entera, `valor a cobrar` queda en 0 y la cuota sale
+  // del reparto: ningún pago que llegue después puede entrarle (caso del doc
+  // 1038415208, cuota 3681PN46253). Poner 0 = "ese abono no existe"; vaciar la
+  // casilla borra la corrección y vuelve a lo que dice el Excel.
+  // Mismo patrón que valor de cuota y fecha de vencimiento: la app registra la
+  // decisión en cartera_preventiva_overrides y el pipeline escribe
+  // cartera_preventiva.pago y recalcula `valor a cobrar`. Nunca al revés.
+  const handleSavePago = async (row: CarteraPreventivaRow, valor: string) => {
+    const raw   = valor.trim();
+    const nuevo = raw === "" ? null : parseMonto(raw);
+    if (nuevo !== null && (!Number.isFinite(nuevo) || nuevo < 0)) return;
+    // Un abono mayor a la cuota dejaría `valor a cobrar` en negativo, que
+    // ninguna pantalla sabe mostrar. Se compara contra el valor guardado, no
+    // contra el que pueda estar a medio escribir en la casilla de al lado.
+    if (nuevo !== null && nuevo > row.valor_cuota) {
+      setRowError((prev) => ({
+        ...prev,
+        [row.llave]: `El abono no puede superar el valor de la cuota (${fmtMonto(row.valor_cuota)}).`,
+      }));
+      return;
+    }
+    setRowSaving(row.llave);
+    setRowError((prev) => ({ ...prev, [row.llave]: "" }));
+    try {
+      const res  = await fetch("/api/cartera-preventiva/overrides", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ llave: row.llave, pago_manual: nuevo }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al guardar el abono");
+      setRowMessage((prev) => ({
+        ...prev,
+        [row.llave]: nuevo === null
+          ? "Corrección del abono eliminada. Se refleja al terminar el recálculo."
+          : "Abono corregido. Se refleja al terminar el recálculo.",
+      }));
+      // Sin matchingKey: es una llave de CUOTA, no de pago — mandarla como
+      // matchingKey haría que cruzar.py buscara un pago inexistente y no
+      // recalculara nada.
       fireTrigger(row.llave);
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
@@ -1565,6 +1615,20 @@ export default function CarteraPreventivaView() {
                   // anterior.
                   const vencValue   = vencEdits[row.llave] ?? row.fecha_vencimiento ?? "";
                   const vencChanged = vencValue.trim() !== "" && vencValue !== row.fecha_vencimiento;
+                  // Abono del Excel, editable. `pago` es text y puede traer
+                  // centavos ("485086.5"): se muestra redondeado a pesos como el
+                  // resto de la vista, y la comparación "cambió / no cambió" va
+                  // contra ese mismo entero — si no, toda cuota con decimales
+                  // saldría con el ✓ puesto de entrada. Vaciar la casilla borra
+                  // la corrección (pago_manual = null), y por eso cuenta como
+                  // cambio solo si la fila hoy trae abono.
+                  const pagoActual  = Math.round(numPago(row.pago));
+                  const pagoGuardado = row.pago != null && row.pago.trim() !== "";
+                  const pagoValue   = pagoEdits[row.llave] ?? (pagoGuardado ? formatMonto(pagoActual) : "");
+                  const pagoNum     = parseMonto(pagoValue);
+                  const pagoChanged = pagoValue.trim() === ""
+                    ? pagoGuardado
+                    : Number.isFinite(pagoNum) && pagoNum !== pagoActual;
                   const puedeAsociar = multiInscripcionDocs.has(row.cruce_access);
                   // Regla #4/#7: mensaje + botón de asociar saldo a favor,
                   // solo en las cuotas que necesitan dinero (pendiente o pago
@@ -1655,7 +1719,30 @@ export default function CarteraPreventivaView() {
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.pago)}</td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={pagoValue}
+                          title="Abono que trae el Excel de cartera. 0 = ese abono no existe; vacío borra la corrección."
+                          onChange={(e) => setPagoEdits((prev) => ({ ...prev, [row.llave]: e.target.value }))}
+                          onBlur={(e) => setPagoEdits((prev) => ({ ...prev, [row.llave]: formatMonto(e.target.value) }))}
+                          disabled={saving}
+                          className="w-24 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                        />
+                        {pagoChanged && (
+                          <button
+                            onClick={() => handleSavePago(row, pagoValue)}
+                            disabled={saving}
+                            title="Guardar corrección del abono"
+                            className="text-xs px-1.5 py-1 rounded-lg bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                          >
+                            ✓
+                          </button>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.valor_a_cobrar)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.programa)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.fecha_pago)}</td>

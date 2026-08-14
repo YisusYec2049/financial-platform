@@ -54,6 +54,20 @@ export async function POST(req: NextRequest) {
   // pipeline sobre la fila (igual que valor_cuota_manual) — esta app NUNCA
   // escribe cartera_preventiva.fecha_vencimiento directo.
   if (typeof body?.fecha_vencimiento_manual === "string") update.fecha_vencimiento_manual = body.fecha_vencimiento_manual;
+  // Abono del Excel corregido a mano (14/08). Poner 0 es el caso principal y
+  // significa "ese abono no existe": la cuota vuelve a deber lo suyo entero y
+  // vuelve al reparto (con `valor a cobrar` en 0 ningún pago posterior puede
+  // entrarle). Mandar null borra la corrección y la cuota vuelve a lo que dice
+  // el Excel — por eso el branch explícito, igual que fecha_pago_manual: con
+  // solo `typeof === "number"` no habría forma de revertir un error de dedo.
+  // La columna real (cartera_preventiva.pago) la escribe el pipeline, nunca
+  // esta app: si las dos escriben, la próxima corrida pisa lo de la pantalla.
+  if (typeof body?.pago_manual === "number") {
+    if (!Number.isFinite(body.pago_manual) || body.pago_manual < 0) {
+      return NextResponse.json({ error: "El abono no puede ser negativo" }, { status: 400 });
+    }
+    update.pago_manual = body.pago_manual;
+  } else if (body?.pago_manual === null)                update.pago_manual = null;
   if (typeof body?.es_ultima_cuota === "boolean")       update.es_ultima_cuota = body.es_ultima_cuota;
 
   if (Object.keys(update).length === 1) {
