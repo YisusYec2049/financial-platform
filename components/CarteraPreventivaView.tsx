@@ -178,10 +178,20 @@ type PagoAsociable = {
 type InscripcionPendiente = {
   llave: string;
   inscrip: string;
+  cliente: string | null;
   valor_a_cobrar: number;
   valor_cuota: number;
   sistema_financiero: string | null;
   fecha_vencimiento: string;
+};
+
+// Lo que se muestra al buscar el documento destino de un envío de saldo. Sale del
+// MISMO GET del panel de asociar, que ya devuelve las inscripciones con cuota
+// pendiente de un documento — no hizo falta ruta nueva.
+type DestinoTraslado = {
+  cliente: string | null;
+  inscripciones: string[];
+  debe: number;
 };
 
 // Regla #4/#7 (Spec Auto Cartera): ledger de saldos a favor no auto-aplicados
@@ -246,6 +256,14 @@ export default function CarteraPreventivaView() {
   const [asociarError, setAsociarError]         = useState<Record<string, string>>({});
   const [asociarMessage, setAsociarMessage]     = useState<Record<string, string>>({});
   const [montoOtroValor, setMontoOtroValor]     = useState<Record<string, string>>({});
+  // Envío de saldo a otro documento. Todo va por pago (`${doc}:${matching_key}`),
+  // que es la unidad sobre la que se decide: un pago puede cubrir a dos personas.
+  const [enviarOpen, setEnviarOpen]             = useState<Record<string, boolean>>({});
+  const [enviarDocInput, setEnviarDocInput]     = useState<Record<string, string>>({});
+  const [enviarMontoInput, setEnviarMontoInput] = useState<Record<string, string>>({});
+  const [enviarDestino, setEnviarDestino]       = useState<Record<string, DestinoTraslado | null>>({});
+  const [enviarBuscando, setEnviarBuscando]     = useState<Record<string, boolean>>({});
+  const [enviarError, setEnviarError]           = useState<Record<string, string>>({});
   const [cierreOpen, setCierreOpen]             = useState<Record<string, boolean>>({});
   const [cierreFecha, setCierreFecha]           = useState<Record<string, string>>({});
   const [cuotaEdits, setCuotaEdits]             = useState<Record<string, string>>({});
@@ -683,6 +701,100 @@ export default function CarteraPreventivaView() {
       // botón de al lado hace 14 segundos). Releer deja a la vista el estado real
       // en vez de un panel que sigue ofreciendo plata que ya no está.
       fetchAsociarData(doc);
+    } finally {
+      setRowSaving(null);
+    }
+  };
+
+  // Buscar el documento destino antes de enviar. Reutiliza el GET del panel de
+  // asociar: si el documento no tiene cuotas abiertas, `inscripciones` viene vacío
+  // y eso es justamente lo que hay que enseñar — la plata no se podría usar allá.
+  // El nombre a la vista es lo único que deja notar que se erró el documento.
+  const handleBuscarDestino = async (key: string, documento: string) => {
+    const doc = documento.trim();
+    if (!doc) return;
+    setEnviarBuscando((prev) => ({ ...prev, [key]: true }));
+    setEnviarError((prev) => ({ ...prev, [key]: "" }));
+    setEnviarDestino((prev) => ({ ...prev, [key]: null }));
+    try {
+      const res  = await fetch(`/api/cartera-preventiva/asociar?documento=${encodeURIComponent(doc)}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al buscar el documento");
+      const inscripciones = (json.inscripciones || []) as InscripcionPendiente[];
+      setEnviarDestino((prev) => ({
+        ...prev,
+        [key]: {
+          cliente: inscripciones.find((i) => i.cliente)?.cliente ?? null,
+          inscripciones: [...new Set(inscripciones.map((i) => i.inscrip))],
+          debe: inscripciones.reduce((a, i) => a + Number(i.valor_a_cobrar || 0), 0),
+        },
+      }));
+    } catch (err) {
+      setEnviarError((prev) => ({ ...prev, [key]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setEnviarBuscando((prev) => ({ ...prev, [key]: false }));
+    }
+  };
+
+  // Enviar plata de este pago al documento de OTRA persona. Queda como saldo a
+  // favor de esa persona y allá se recoge con el botón "Asociar saldo" que ya
+  // existe: son dos pasos a propósito, enviar y después asociar a la cuota que
+  // corresponda. El servidor revalida las 6 condiciones dentro de la función de
+  // base y responde 409; acá no se valida nada que allá no se vuelva a mirar.
+  const handleEnviarSaldo = async (doc: string, pago: PagoAsociable, documentoDestino: string, monto: number) => {
+    const key = `${doc}:${pago.matching_key}`;
+    setRowSaving(`enviar:${key}`);
+    setEnviarError((prev) => ({ ...prev, [key]: "" }));
+    try {
+      const res  = await fetch("/api/cartera-preventiva/enviar-saldo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          matching_key: pago.matching_key,
+          documento_destino: documentoDestino.trim(),
+          monto,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al enviar el saldo");
+      setEnviarOpen((prev) => ({ ...prev, [key]: false }));
+      setEnviarDestino((prev) => ({ ...prev, [key]: null }));
+      setEnviarDocInput((prev) => ({ ...prev, [key]: "" }));
+      setEnviarMontoInput((prev) => ({ ...prev, [key]: "" }));
+      setAsociarMessage((prev) => ({
+        ...prev,
+        [doc]: `Se enviaron ${fmtMonto(monto)} al documento ${documentoDestino.trim()}. Allá aparece como saldo a favor, listo para asociar a una cuota.`,
+      }));
+      // El restante del pago bajó y el ledger tiene una fila nueva: hay que releer
+      // los dos, o el panel sigue ofreciendo plata que ya se fue.
+      fetchAsociarData(doc);
+      fetchSaldosFavor();
+    } catch (err) {
+      setEnviarError((prev) => ({ ...prev, [key]: err instanceof Error ? err.message : "Error inesperado" }));
+      // Un rechazo casi siempre significa que este panel está viejo (otra pestaña,
+      // o el botón de al lado hace unos segundos). Mismo criterio que handleAsociar.
+      fetchAsociarData(doc);
+    } finally {
+      setRowSaving(null);
+    }
+  };
+
+  // Deshacer un envío: un documento mal escrito manda plata a la pantalla de un
+  // desconocido. Solo mientras nadie la haya asociado — de eso se encarga el
+  // servidor, que revalida que el saldo siga intacto y responde 409 si no.
+  const handleDeshacerTraslado = async (row: CarteraPreventivaRow, saldo: SaldoFavorRow) => {
+    const actionKey = `deshacer:${saldo.id}`;
+    setRowSaving(actionKey);
+    setRowError((prev) => ({ ...prev, [row.llave]: "" }));
+    try {
+      const res  = await fetch(`/api/cartera-preventiva/enviar-saldo?saldo_id=${saldo.id}`, { method: "DELETE" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al deshacer el envío");
+      setRowMessage((prev) => ({ ...prev, [row.llave]: "Envío deshecho. La plata volvió al pago de origen." }));
+      fetchSaldosFavor();
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
+      fetchSaldosFavor();
     } finally {
       setRowSaving(null);
     }
@@ -1910,6 +2022,98 @@ export default function CarteraPreventivaView() {
                                         </div>
                                       );
                                     })}
+                                    {/* Enviar a otro documento: un pago puede cubrir a dos
+                                        personas (una empresa por su empleado, un familiar por
+                                        otro). Hasta acá la plata solo se podía mover dentro
+                                        del documento del pagador. */}
+                                    {(() => {
+                                      const key = `${row.cruce_access}:${pago.matching_key}`;
+                                      const destino = enviarDestino[key];
+                                      const docDestino = (enviarDocInput[key] || "").trim();
+                                      const savingEnvio = rowSaving === `enviar:${key}`;
+                                      const montoEnvio = enviarMontoInput[key]
+                                        ? parseMonto(enviarMontoInput[key])
+                                        : pago.restante;
+                                      const montoValido = Number.isFinite(montoEnvio) && montoEnvio > 0
+                                        && montoEnvio <= pago.restante + 0.01;
+                                      return (
+                                        <div className="pt-1 border-t border-gray-100">
+                                          <button
+                                            onClick={() => setEnviarOpen((prev) => ({ ...prev, [key]: !prev[key] }))}
+                                            className="text-[11px] px-1.5 py-0.5 rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50 active:scale-95 transition-all duration-200 ease-(--ease-spring)"
+                                          >
+                                            {enviarOpen[key] ? "Ocultar envío" : "Enviar saldo a otro documento"}
+                                          </button>
+                                          {enviarOpen[key] && (
+                                            <div className="animate-fade-in mt-1 space-y-1 bg-indigo-50/60 border border-indigo-200/80 rounded-lg p-1.5">
+                                              <div className="flex items-center gap-1">
+                                                <input
+                                                  type="text"
+                                                  placeholder="Documento destino"
+                                                  value={enviarDocInput[key] || ""}
+                                                  onChange={(e) => {
+                                                    setEnviarDocInput((prev) => ({ ...prev, [key]: e.target.value }));
+                                                    setEnviarDestino((prev) => ({ ...prev, [key]: null }));
+                                                  }}
+                                                  className="flex-1 min-w-0 text-[11px] border border-gray-300 rounded px-1 py-0.5"
+                                                />
+                                                <button
+                                                  onClick={() => handleBuscarDestino(key, docDestino)}
+                                                  disabled={!docDestino || enviarBuscando[key]}
+                                                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                                                >
+                                                  {enviarBuscando[key] ? "..." : "Buscar"}
+                                                </button>
+                                              </div>
+                                              {destino && (
+                                                destino.inscripciones.length === 0 ? (
+                                                  <p className="text-[11px] text-red-600">
+                                                    Ese documento no tiene cuotas abiertas en la cartera: la plata no se
+                                                    vería en ninguna pantalla.
+                                                  </p>
+                                                ) : (
+                                                  <>
+                                                    <p className="text-[11px] text-indigo-900">
+                                                      ✓ {fmt(destino.cliente)}
+                                                    </p>
+                                                    <p className="text-[11px] text-indigo-700">
+                                                      {destino.inscripciones.length} inscripción(es) con cuotas abiertas
+                                                      ({destino.inscripciones.join(", ")}) · debe {fmtMonto(destino.debe)}
+                                                    </p>
+                                                    <div className="flex items-center gap-1">
+                                                      <input
+                                                        type="text"
+                                                        inputMode="numeric"
+                                                        placeholder={formatMonto(pago.restante)}
+                                                        value={enviarMontoInput[key] || ""}
+                                                        onChange={(e) => setEnviarMontoInput((prev) => ({ ...prev, [key]: e.target.value }))}
+                                                        onBlur={(e) => setEnviarMontoInput((prev) => ({ ...prev, [key]: formatMonto(e.target.value) }))}
+                                                        className="w-24 text-[11px] border border-gray-300 rounded px-1 py-0.5"
+                                                      />
+                                                      <button
+                                                        onClick={() => handleEnviarSaldo(row.cruce_access, pago, docDestino, montoEnvio)}
+                                                        disabled={savingEnvio || !montoValido}
+                                                        title={montoValido ? undefined : `A este pago solo le quedan ${fmtMonto(pago.restante)}`}
+                                                        className="text-[11px] px-1.5 py-0.5 rounded bg-indigo-700 text-white hover:bg-indigo-800 disabled:opacity-50"
+                                                      >
+                                                        {savingEnvio ? "Enviando..." : "Enviar saldo"}
+                                                      </button>
+                                                    </div>
+                                                    <p className="text-[11px] text-gray-500">
+                                                      Por defecto se envía todo el restante. La plata llega como saldo a
+                                                      favor de esa persona y allá se asocia a la cuota que corresponda.
+                                                    </p>
+                                                  </>
+                                                )
+                                              )}
+                                              {enviarError[key] && (
+                                                <p className="text-[11px] text-red-600">{enviarError[key]}</p>
+                                              )}
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })()}
                                   </div>
                                 ))}
                                 {asociarMessage[row.cruce_access] && (
@@ -1942,6 +2146,24 @@ export default function CarteraPreventivaView() {
                                       <p className="text-[11px] text-gray-600">
                                         {fmt(saldo.cliente)} · {fmt(saldo.fecha)} · disponible {fmtMonto(saldo.disponible)}
                                       </p>
+                                      {/* Un envío se puede deshacer SOLO mientras nadie lo haya
+                                          asociado: si ya se usó una parte, la plata está en una
+                                          cuota y el camino es "Descartar pago" allá. El servidor
+                                          revalida lo mismo y responde 409. */}
+                                      {saldo.origen === "traslado" && (
+                                        <div className="flex items-center gap-1">
+                                          <span className="text-[11px] text-indigo-700">Enviado desde otro documento</span>
+                                          {Number(saldo.disponible) === Number(saldo.monto) && (
+                                            <button
+                                              onClick={() => handleDeshacerTraslado(row, saldo)}
+                                              disabled={rowSaving === `deshacer:${saldo.id}`}
+                                              className="text-[11px] px-1.5 py-0.5 rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                                            >
+                                              {rowSaving === `deshacer:${saldo.id}` ? "..." : "Deshacer envío"}
+                                            </button>
+                                          )}
+                                        </div>
+                                      )}
                                       <div className="flex items-center gap-1 text-[11px]">
                                         <button
                                           onClick={() => handleAsociarSaldo(row, saldo, montoTodo)}

@@ -19,7 +19,8 @@ import { requireAuth } from "@/lib/auth";
 // que asociar, así que el botón "Asociar" no debe aparecer ahí. Se agrega la
 // misma condición que ya usa GET /api/cartera-preventiva/asociar: al menos
 // un pago de consolidated_transactions cuyo payment_amount, menos lo ya
-// repartido en pago_asociaciones para ese matching_key, sea > 0.
+// repartido en pago_asociaciones Y en pago_asociaciones_archivo para ese
+// matching_key, sea > 0.
 export async function GET(req: NextRequest) {
   const { response } = await requireAuth(req);
   if (response) return response;
@@ -69,13 +70,31 @@ export async function GET(req: NextRequest) {
 
   const matchingKeys = (pagos || []).map((p) => p.matching_key);
   const asociado = new Map<string, number>();
-  if (matchingKeys.length > 0) {
+  // Por lotes de 200, igual que `restantePorPago` en /asociar: un `.in()` largo puede
+  // volver CORTADO sin error, y acá un pago que vuelve cortado se lee como "tiene
+  // plata libre" — justo al revés de lo que hay que proteger.
+  for (let i = 0; i < matchingKeys.length; i += 200) {
+    const lote = matchingKeys.slice(i, i + 200);
+
     const { data: asociaciones, error: asocError } = await supabase
       .from("pago_asociaciones")
       .select("matching_key, monto")
-      .in("matching_key", matchingKeys);
+      .in("matching_key", lote);
     if (asocError) return NextResponse.json({ error: asocError.message }, { status: 500 });
     for (const a of asociaciones || []) {
+      asociado.set(a.matching_key, (asociado.get(a.matching_key) ?? 0) + Number(a.monto));
+    }
+
+    // Lo repartido bajo una cartera anterior cuenta igual: esa plata ya pagó una
+    // cuota. Sin esto el botón "Asociar" sigue apareciendo para gente cuya única
+    // plata "libre" ya está gastada, y al abrir el panel no hay nada que asociar —
+    // que es peor que no ofrecerlo.
+    const { data: archivadas, error: archError } = await supabase
+      .from("pago_asociaciones_archivo")
+      .select("matching_key, monto")
+      .in("matching_key", lote);
+    if (archError) return NextResponse.json({ error: archError.message }, { status: 500 });
+    for (const a of archivadas || []) {
       asociado.set(a.matching_key, (asociado.get(a.matching_key) ?? 0) + Number(a.monto));
     }
   }

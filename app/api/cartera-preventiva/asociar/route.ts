@@ -4,17 +4,30 @@ import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { fetchSellados } from "@/lib/sellados";
 
-// Cuánto le queda a un pago por repartir. La plata de un pago vive en DOS sitios,
-// y la cuenta tiene que mirar los dos — es la misma que hace el chequeo de cuadre
+// Cuánto le queda a un pago por repartir. La plata de un pago vive en TRES sitios,
+// y la cuenta tiene que mirar los tres — es la misma que hace el chequeo de cuadre
 // del pipeline (`entró = aplicado + disponible`):
 //
-//   restante = payment_amount − Σ pago_asociaciones.monto − Σ cartera_saldos_favor.disponible
+//   restante = payment_amount
+//              − Σ pago_asociaciones.monto
+//              − Σ pago_asociaciones_archivo.monto
+//              − Σ cartera_saldos_favor.disponible
 //
-// Sin el tercer término, un pago cuya plata quedó libre tras un descarte se ofrece
+// Sin el término de saldos, un pago cuya plata quedó libre tras un descarte se ofrece
 // ENTERO aunque ya esté comprometida en el ledger de saldos, y asociarlo desde acá
 // la cuenta dos veces. Pasó el 12 de agosto con el pago `7780`: quedó una cuota de
 // $400.000 con $800.000 aplicados desde un pago que trajo $400.000. Para mover esa
 // plata el camino correcto es "Asociar saldo", que sí la descuenta.
+//
+// Sin el término del ARCHIVO pasa lo mismo con la plata de la cartera anterior:
+// cuando llega la cartera del mes, lo repartido se mueve de `pago_asociaciones` a
+// `pago_asociaciones_archivo`. Esa plata YA pagó una cuota, pero mirando solo la
+// tabla viva el pago se ve entero y el panel deja ponerlo otra vez sobre una cuota
+// nueva — la resaca del 30 de julio hecha a mano. El sello no lo detiene y no hay
+// que "arreglarlo": `cruzar_cartera_preventiva.py` excluye a propósito de sellar los
+// pagos que se repartieron bajo una cartera anterior (sin esa exclusión, el 5 de
+// agosto se habrían sellado 550 pagos en vez de 0). El hueco está en la cuenta de la
+// plata, no en el sello.
 const TOLERANCIA = 0.01;
 
 async function restantePorPago(
@@ -34,6 +47,18 @@ async function restantePorPago(
       .in("matching_key", lote);
     if (asocError) return { restante, error: asocError.message };
     for (const a of asociaciones ?? []) {
+      restante.set(a.matching_key as string, (restante.get(a.matching_key as string) ?? 0) + Number(a.monto));
+    }
+
+    // La plata repartida bajo una cartera anterior. Va en el MISMO bucle por lotes:
+    // un `.in()` largo puede volver cortado sin error, y acá un pago que vuelve
+    // cortado se lee como "tiene plata libre" — justo al revés de lo que protege.
+    const { data: archivadas, error: archError } = await supabase
+      .from("pago_asociaciones_archivo")
+      .select("matching_key, monto")
+      .in("matching_key", lote);
+    if (archError) return { restante, error: archError.message };
+    for (const a of archivadas ?? []) {
       restante.set(a.matching_key as string, (restante.get(a.matching_key as string) ?? 0) + Number(a.monto));
     }
 
@@ -72,7 +97,10 @@ export async function GET(req: NextRequest) {
 
   const { data: inscripciones, error: insError } = await supabase
     .from("cartera_preventiva")
-    .select("llave, inscrip, valor_a_cobrar, valor_cuota, sistema_financiero, fecha_vencimiento")
+    // `cliente` lo necesita el buscador de documento destino del envío de saldo:
+    // sin el nombre a la vista, quien aprieta no tiene cómo darse cuenta de que se
+    // equivocó de documento y la plata aterriza en la pantalla de un desconocido.
+    .select("llave, inscrip, cliente, valor_a_cobrar, valor_cuota, sistema_financiero, fecha_vencimiento")
     .eq("cruce_access", documento)
     .is("fecha_pago", null);
   if (insError) return NextResponse.json({ error: insError.message }, { status: 500 });
@@ -97,7 +125,13 @@ export async function GET(req: NextRequest) {
     .filter((p) => !sellados.has(p.matching_key as string))
     .map((p) => ({
       ...p,
-      restante: Number(p.payment_amount) - (comprometido.get(p.matching_key as string) ?? 0),
+      // Clamp a 0 para MOSTRAR: sumar el archivo puede dar más de lo que entró por
+      // el pago (hay pagos aplicados en varias versiones de cartera — `7622`,
+      // $300.000, con $900.000 archivados). Eso es rastro de la resaca, no algo que
+      // se arregle acá; lo que no puede pasar es que la pantalla diga "le quedan
+      // $-600.000". Para DECIDIR si se ofrece da igual: el filtro es `> 0` y un
+      // negativo queda fuera con clamp o sin él.
+      restante: Math.max(0, Number(p.payment_amount) - (comprometido.get(p.matching_key as string) ?? 0)),
     }))
     .filter((p) => p.restante > 0);
 
@@ -151,7 +185,7 @@ export async function POST(req: NextRequest) {
       {
         error: restante > 0
           ? `A este pago solo le quedan $${Math.round(restante).toLocaleString("es-CO")} por asociar.`
-          : "Este pago ya no tiene plata libre: lo que quedaba está aplicado o convertido en saldo a favor. Para moverlo, usá \"Asociar saldo\".",
+          : "Este pago ya se aplicó a una cuota (en esta cartera o en una anterior) y no le queda plata libre. Si lo que quedaba se convirtió en saldo a favor, el camino es \"Asociar saldo\".",
       },
       { status: 409 },
     );
