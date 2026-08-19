@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sanitizeSearch } from "@/lib/search";
+import { fetchRenglonesCompartidos, expandirRenglones, matchingKeysPorPersona, orMatchingKeys } from "@/lib/pagoCompartido";
 
 export async function GET(req: NextRequest) {
   const { user, response } = await requireAuth(req);
@@ -24,6 +25,16 @@ export async function GET(req: NextRequest) {
   let allData: Record<string, unknown>[] = [];
   let from = 0;
 
+  // Misma expansión del buscador que en la lista (ver el comentario allí): la
+  // descarga tiene que traer exactamente lo mismo que la pantalla.
+  let orPorPersona = "";
+  if (search) {
+    const { keys, error: keysError } = await matchingKeysPorPersona(supabase, search);
+    if (keysError) return NextResponse.json({ error: keysError }, { status: 500 });
+    const fragmento = orMatchingKeys(keys);
+    if (fragmento) orPorPersona = `,${fragmento}`;
+  }
+
   while (allData.length < MAX_ROWS) {
     const remaining = MAX_ROWS - allData.length;
     const batchSize = Math.min(BATCH, remaining);
@@ -43,6 +54,7 @@ export async function GET(req: NextRequest) {
     if (search) {
       query = query.or(
         `identification.ilike.%${search}%,transaction_code_1.ilike.%${search}%,email.ilike.%${search}%,matching_key.ilike.%${search}%`
+        + orPorPersona
       );
     }
     if (paymentMethod) {
@@ -88,6 +100,18 @@ export async function GET(req: NextRequest) {
     return true;
   });
 
+  // Una fila por RENGLÓN, no por pago: quien abre el Excel tiene que poder sumar la
+  // columna del monto y que dé el total real. Con una sola fila por pago compartido
+  // esa suma cuenta el pago entero para una persona y a la otra no la ve.
+  const pagos = deduped.map((r) => ({
+    matching_key: r.matching_key as string,
+    identification: (r.identification as string) ?? null,
+    payment_amount: r.payment_amount as number | null,
+  }));
+  const { renglones, error: renglonesError } = await fetchRenglonesCompartidos(supabase, pagos);
+  if (renglonesError) return NextResponse.json({ error: renglonesError }, { status: 500 });
+  const expandidas = expandirRenglones(deduped, renglones);
+
   await logAudit({
     user_email: user.email ?? "unknown",
     action: "download",
@@ -95,5 +119,12 @@ export async function GET(req: NextRequest) {
     result_count: deduped.length,
   });
 
-  return NextResponse.json({ data: deduped, count: deduped.length, truncated });
+  // `count` sigue siendo el número de PAGOS (es lo que se compara contra el contador
+  // de la pantalla); `renglones` es cuántas filas lleva el archivo.
+  return NextResponse.json({
+    data: expandidas,
+    count: deduped.length,
+    renglones: expandidas.length,
+    truncated,
+  });
 }

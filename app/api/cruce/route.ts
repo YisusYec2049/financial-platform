@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sanitizeSearch } from "@/lib/search";
+import { fetchRenglonesCompartidos, expandirRenglones, matchingKeysPorPersona, orMatchingKeys } from "@/lib/pagoCompartido";
 
 export async function GET(req: NextRequest) {
   const { user, response } = await requireAuth(req);
@@ -32,8 +33,17 @@ export async function GET(req: NextRequest) {
     .eq("estado_cruce", "cruzado");
 
   if (search) {
+    // Buscar por el documento (o el INCP) de la SEGUNDA persona de un pago
+    // compartido tiene que encontrar el pago — es el uso principal de esa entrega:
+    // el área llega por ahí, no por el pagador. `cruce_cartera.identification` es
+    // el del pagador y nada más, así que esas llaves se resuelven aparte y se
+    // suman al mismo `.or()`.
+    const { keys, error: keysError } = await matchingKeysPorPersona(supabase, search);
+    if (keysError) return NextResponse.json({ error: keysError }, { status: 500 });
+    const porPersona = orMatchingKeys(keys);
     query = query.or(
       `identification.ilike.%${search}%,transaction_code_1.ilike.%${search}%,email.ilike.%${search}%,matching_key.ilike.%${search}%`
+      + (porPersona ? `,${porPersona}` : "")
     );
   }
 
@@ -79,6 +89,20 @@ export async function GET(req: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // Se pagina POR PAGO y se expande después, nunca al revés: la cantidad de
+  // renglones no se sabe sin resolver el reparto de cada pago, y una paginación que
+  // no puede contar sus filas es exactamente lo que perdía filas en silencio el 5 de
+  // agosto. Consecuencia aceptada: una página puede traer más renglones que su
+  // tamaño — lo que no puede pasar es que un renglón se pierda o se repita.
+  const pagos = (data ?? []).map((r) => ({
+    matching_key: r.matching_key as string,
+    identification: (r.identification as string) ?? null,
+    payment_amount: r.payment_amount as number | null,
+  }));
+  const { renglones, error: renglonesError } = await fetchRenglonesCompartidos(supabase, pagos);
+  if (renglonesError) return NextResponse.json({ error: renglonesError }, { status: 500 });
+  const expandidas = expandirRenglones(data ?? [], renglones);
+
   logAudit({
     user_email: user.email ?? "unknown",
     action: "query",
@@ -86,5 +110,14 @@ export async function GET(req: NextRequest) {
     result_count: count ?? 0,
   });
 
-  return NextResponse.json({ data, count, page, pageSize });
+  // `count` sigue contando PAGOS (es lo que pagina); `renglones` es cuántas filas
+  // trae esta página, para que el contador pueda decirlo sin que parezca un error.
+  return NextResponse.json({
+    data: expandidas,
+    count,
+    page,
+    pageSize,
+    renglones: expandidas.length,
+    compartidos: renglones.size,
+  });
 }

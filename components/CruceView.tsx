@@ -120,6 +120,28 @@ function SegmentedControl({
   );
 }
 
+/**
+ * Las 3 columnas que la ruta agrega y que NO son columnas de `cruce_cartera`. Van al
+ * frente con nombre legible, y las crudas salen del spread — si no, el archivo
+ * llevaría "Pago compartido" y "compartido" con el mismo dato, que es el defecto que
+ * ya se corrigió con `incp` (5/8), `ci` (6/8) y `payment_time` (11/8).
+ *
+ * `identification`, `incp` y `payment_amount` **ya vienen repartidos por persona**
+ * desde la ruta: por eso sumar la columna del monto da el total real y no cuenta el
+ * pago entero por cada renglón.
+ */
+function conColumnasDeRenglon(rows: Record<string, unknown>[]) {
+  return rows.map((row) => {
+    const r = { ...row };
+    for (const k of ["compartido", "titular", "renglon_id", "principal"]) delete r[k];
+    return {
+      "Pago compartido": row.compartido ? "Sí" : "",
+      "Titular del renglón": row.titular ?? "",
+      ...r,
+    };
+  });
+}
+
 function buildXlsx(rows: Record<string, unknown>[], filename: string, sheetName: string) {
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
@@ -166,6 +188,17 @@ type CruceRow = {
   metodo_de_pago: string | null;
   ci: string | null;
   cruce: string | null;
+  // "Pago compartido": la misma plata contada por persona. Un pago que pagó cuotas
+  // de dos personas sale como DOS renglones — mismo `matching_key`, distinto
+  // documento, nombre, INCP y monto. Lo resuelve el servidor (`lib/pagoCompartido`);
+  // acá solo se pinta. `renglon_id` es lo único único por fila: `matching_key` deja
+  // de serlo, así que es el que va como `key` de React.
+  renglon_id: string;
+  compartido: boolean;
+  titular: string | null;
+  /** El renglón del pagador, el único que corresponde a la fila de `cruce_cartera`
+   *  y por tanto el único editable. */
+  principal: boolean;
 };
 
 /**
@@ -309,7 +342,7 @@ export default function CruceView() {
       const res  = await fetch(`/api/cruce/download?${buildDownloadParams()}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al descargar");
-      const allRows = json.data || [];
+      const allRows = conColumnasDeRenglon(json.data || []);
       if (json.truncated) {
         setFetchError("Se descargaron las primeras 50,000 filas. Usa los filtros para acotar la búsqueda.");
       }
@@ -332,7 +365,7 @@ export default function CruceView() {
       if (json.truncated) {
         setFetchError("Se descargaron las primeras 50,000 filas. Usa los filtros para acotar la búsqueda.");
       }
-      const rows: Record<string, unknown>[] = json.data || [];
+      const rows = conColumnasDeRenglon(json.data || []);
       buildCsv(rows, `cruce_cartera_${new Date().toISOString().slice(0, 10)}.csv`);
     } catch (err) {
       setFetchError(err instanceof Error ? err.message : "Error al descargar el archivo");
@@ -431,6 +464,7 @@ export default function CruceView() {
   };
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
+  const hayCompartidos = data.some((r) => r.compartido);
 
   const handlePage = (p: number) => {
     setPage(p);
@@ -629,7 +663,15 @@ export default function CruceView() {
 
       <div className="px-1 flex items-center justify-between gap-3">
         <span className="text-sm text-gray-500">
-          {loading ? "Cargando..." : `${total.toLocaleString("es-CO")} registros encontrados`}
+          {/* El contador cuenta PAGOS, que es lo que pagina. Cuando hay un pago
+              compartido la página trae más filas que pagos, y decirlo evita que se
+              lea como un error de la pantalla. */}
+          {loading
+            ? "Cargando..."
+            : `${total.toLocaleString("es-CO")} registros encontrados` +
+              (hayCompartidos
+                ? ` (${data.length.toLocaleString("es-CO")} renglones${totalPages > 1 ? " en esta página" : ""})`
+                : "")}
         </span>
 
         <div className="flex items-center gap-2">
@@ -748,9 +790,27 @@ export default function CruceView() {
                   const edit    = getEdit(row);
                   const saving  = savingKey === row.matching_key;
                   const changed = hasEdit(row);
+                  // Solo el renglón del pagador se puede editar: es el único que
+                  // corresponde a la fila de `cruce_cartera`. Guardar desde el
+                  // renglón de la otra persona escribiría SU inscripción en el INCP
+                  // del pago, que es justo lo que no hay que hacer.
+                  const editable = !row.compartido || row.principal;
                   return (
-                  <tr key={row.matching_key} className="hover:bg-gray-50/70 transition-colors duration-100 align-top">
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.identification)}</td>
+                  <tr key={row.renglon_id} className={`hover:bg-gray-50/70 transition-colors duration-100 align-top ${row.compartido ? "bg-indigo-50/40" : ""}`}>
+                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">
+                      {fmt(row.identification)}
+                      {row.compartido && (
+                        <div className="mt-0.5 flex flex-col gap-0.5">
+                          {row.titular && <span className="text-[11px] text-gray-500">{row.titular}</span>}
+                          <span
+                            title="Este pago cubrió cuotas de dos personas. Se guarda una sola vez; acá se muestra repartido, y cada renglón lleva el monto que le tocó a cada una."
+                            className="bg-indigo-50 text-indigo-700 text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap w-fit"
+                          >
+                            🔗 Pago compartido
+                          </span>
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.payment_date)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_1)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_2)}</td>
@@ -764,23 +824,36 @@ export default function CruceView() {
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.phone)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.payment_amount)}</td>
                     <td className="px-4 py-2.5">
-                      <input
-                        type="text"
-                        value={edit.incp}
-                        onChange={(e) => setEdit(row, "incp", e.target.value)}
-                        disabled={saving}
-                        title="INCP — corrígelo si el pago cruzó contra la inscripción equivocada"
-                        className="w-28 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
-                      />
+                      {editable ? (
+                        <input
+                          type="text"
+                          value={edit.incp}
+                          onChange={(e) => setEdit(row, "incp", e.target.value)}
+                          disabled={saving}
+                          title="INCP — corrígelo si el pago cruzó contra la inscripción equivocada"
+                          className="w-28 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                        />
+                      ) : (
+                        <span
+                          title="La inscripción que pagó esta persona. El INCP del pago se corrige en el renglón del pagador."
+                          className="text-gray-700 whitespace-nowrap"
+                        >
+                          {fmt(row.incp)}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5">
-                      <input
-                        type="text"
-                        value={edit.correo_2}
-                        onChange={(e) => setEdit(row, "correo_2", e.target.value)}
-                        disabled={saving}
-                        className="w-36 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
-                      />
+                      {editable ? (
+                        <input
+                          type="text"
+                          value={edit.correo_2}
+                          onChange={(e) => setEdit(row, "correo_2", e.target.value)}
+                          disabled={saving}
+                          className="w-36 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                        />
+                      ) : (
+                        <span className="text-gray-700">{fmt(row.correo_2)}</span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.nombre)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.metodo_de_pago)}</td>
@@ -788,7 +861,7 @@ export default function CruceView() {
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cruce)}</td>
                     <td className="px-4 py-2.5">
                       <div className="flex flex-col gap-1 min-w-[150px]">
-                        {changed && (
+                        {changed && editable && (
                           <button
                             onClick={() => handleSaveCruce(row)}
                             disabled={saving || isRecalculando(row.matching_key)}
@@ -797,11 +870,14 @@ export default function CruceView() {
                             {saving ? "Guardando..." : "Guardar corrección"}
                           </button>
                         )}
-                        {marcaFila(row.matching_key)}
-                        {rowMessage[row.matching_key] && (
+                        {/* La píldora y los mensajes van por `matching_key`, así que
+                            en un pago compartido saldrían repetidos en los dos
+                            renglones: se pintan solo en el del pagador. */}
+                        {editable && marcaFila(row.matching_key)}
+                        {editable && rowMessage[row.matching_key] && (
                           <span className="text-[11px] text-green-700">{rowMessage[row.matching_key]}</span>
                         )}
-                        {rowError[row.matching_key] && (
+                        {editable && rowError[row.matching_key] && (
                           <span className="text-[11px] text-red-600">{rowError[row.matching_key]}</span>
                         )}
                       </div>
