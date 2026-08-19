@@ -779,18 +779,78 @@ export default function CarteraPreventivaView() {
     }
   };
 
+  // Enviar a otro documento un saldo a favor que YA está en el ledger (sobrante o
+  // descarte). Es el camino del día a día, y NO lo cubre el envío del panel de
+  // asociar: aquel manda el restante LIBRE del pago, y su fórmula descuenta el
+  // ledger — así que en cuanto el sobrante se vuelve saldo a favor responde "a este
+  // pago no le queda nada". Caso que lo destapó: un diplomado de 2 cupos pagado de
+  // un solo giro, con el segundo cupo a nombre de otra cédula.
+  //
+  // La plata sale de la fila de origen y nace a nombre del destino con el MISMO
+  // matching_key (el cuadre del pipeline es por pago, no por persona), en una sola
+  // transacción dentro de `trasladar_saldo_favor()`. Allá se recoge con el botón
+  // "Asociar saldo" que ya existe: son dos pasos a propósito.
+  const handleEnviarSaldoFavor = async (
+    row: CarteraPreventivaRow,
+    saldo: SaldoFavorRow,
+    key: string,
+    documentoDestino: string,
+    monto: number,
+  ) => {
+    setRowSaving(`enviar:${key}`);
+    setEnviarError((prev) => ({ ...prev, [key]: "" }));
+    try {
+      const res  = await fetch("/api/cartera-preventiva/enviar-saldo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          saldo_id: saldo.id,
+          documento_destino: documentoDestino.trim(),
+          monto,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al enviar el saldo");
+      setEnviarOpen((prev) => ({ ...prev, [key]: false }));
+      setEnviarDestino((prev) => ({ ...prev, [key]: null }));
+      setEnviarDocInput((prev) => ({ ...prev, [key]: "" }));
+      setEnviarMontoInput((prev) => ({ ...prev, [key]: "" }));
+      setRowMessage((prev) => ({
+        ...prev,
+        [row.llave]: `Se enviaron ${fmtMonto(monto)} al documento ${documentoDestino.trim()}. Allá aparece como saldo a favor, listo para asociar a una cuota.`,
+      }));
+      fetchSaldosFavor();
+    } catch (err) {
+      setEnviarError((prev) => ({ ...prev, [key]: err instanceof Error ? err.message : "Error inesperado" }));
+      // Un rechazo casi siempre significa que esta pantalla está vieja (otra
+      // pestaña, o el botón de al lado hace unos segundos). Mismo criterio que
+      // handleAsociar: releer deja a la vista lo que de verdad hay.
+      fetchSaldosFavor();
+    } finally {
+      setRowSaving(null);
+    }
+  };
+
   // Deshacer un envío: un documento mal escrito manda plata a la pantalla de un
   // desconocido. Solo mientras nadie la haya asociado — de eso se encarga el
   // servidor, que revalida que el saldo siga intacto y responde 409 si no.
+  //
+  // ⚠️ No es un borrado: si el envío salió de otra fila del ledger, la plata tiene
+  // que VOLVER ahí (a esa fila se le restó el monto). Eso lo hace
+  // `deshacer_traslado_saldo()` en una sola transacción.
   const handleDeshacerTraslado = async (row: CarteraPreventivaRow, saldo: SaldoFavorRow) => {
     const actionKey = `deshacer:${saldo.id}`;
     setRowSaving(actionKey);
     setRowError((prev) => ({ ...prev, [row.llave]: "" }));
     try {
-      const res  = await fetch(`/api/cartera-preventiva/enviar-saldo?saldo_id=${saldo.id}`, { method: "DELETE" });
+      const res  = await fetch("/api/cartera-preventiva/enviar-saldo/deshacer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ saldo_id: saldo.id }),
+      });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al deshacer el envío");
-      setRowMessage((prev) => ({ ...prev, [row.llave]: "Envío deshecho. La plata volvió al pago de origen." }));
+      setRowMessage((prev) => ({ ...prev, [row.llave]: "Envío deshecho. La plata volvió a donde estaba." }));
       fetchSaldosFavor();
     } catch (err) {
       setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
@@ -1770,6 +1830,15 @@ export default function CarteraPreventivaView() {
                   // ahí la plata va en la original, si no se pagaría dos veces.
                   const puedeAsociarSaldo = !!grupo && grupo.total > 0 && necesitaDinero
                                             && !row.original_abierta;
+                  // Enviar ese saldo a otra persona NO exige que esta cuota necesite
+                  // dinero: el caso normal es justo el contrario — la cuota quedó
+                  // pagada y lo que sobró es de otra cédula (un diplomado de 2 cupos
+                  // pagado de un solo giro). Si el bloque solo apareciera cuando se
+                  // puede asociar, la fila con badge "Saldo a favor" —que es donde
+                  // está la plata a repartir— no ofrecería nada, que es el mismo
+                  // agujero que dejó el envío del panel de Asociar (ese panel solo
+                  // se abre con 2+ inscripciones debiendo).
+                  const tieneSaldo = !!grupo && grupo.total > 0;
                   const cuotaRestante = pendiente ? row.valor_a_cobrar : Math.abs(row.diferencia ?? 0);
                   // Regla #3: descartar solo tiene sentido sobre un pago real
                   // ya aplicado — un cierre manual de cartera no tiene pago
@@ -2123,7 +2192,7 @@ export default function CarteraPreventivaView() {
                             )}
                           </div>
                         )}
-                        {puedeAsociarSaldo && (
+                        {tieneSaldo && (
                           <div className="bg-teal-50/60 border border-teal-200/80 rounded-lg p-1.5 space-y-1">
                             <p className="text-[11px] text-teal-800">
                               Esta inscripción tiene un saldo a favor de {fmtMonto(grupo!.total)}
@@ -2133,7 +2202,9 @@ export default function CarteraPreventivaView() {
                               disabled={saving}
                               className="text-xs px-2 py-1 rounded-lg border border-teal-300 text-teal-700 hover:bg-teal-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
                             >
-                              {asociarSaldoOpen[row.llave] ? "Ocultar" : "Asociar pago"}
+                              {asociarSaldoOpen[row.llave]
+                                ? "Ocultar"
+                                : puedeAsociarSaldo ? "Asociar pago" : "Enviar a otro documento"}
                             </button>
                             {asociarSaldoOpen[row.llave] && (
                               <div className="animate-fade-in space-y-1 pt-1">
@@ -2141,6 +2212,23 @@ export default function CarteraPreventivaView() {
                                   const otroKey = `saldo:${saldo.id}:${row.llave}`;
                                   const savingAction = rowSaving === otroKey;
                                   const montoTodo = Math.min(saldo.disponible, cuotaRestante || saldo.disponible);
+                                  // El envío se lleva por fila de ledger Y por cuota a la
+                                  // vista: el mismo saldo se muestra en todas las cuotas de
+                                  // la persona, y compartir el estado haría que escribir el
+                                  // documento en una abriera el panel en todas.
+                                  const envKey   = `${row.llave}:s${saldo.id}`;
+                                  const destino  = enviarDestino[envKey];
+                                  const docDest  = (enviarDocInput[envKey] || "").trim();
+                                  const savingEnvio = rowSaving === `enviar:${envKey}`;
+                                  // Por defecto, TODO lo disponible de ESTA fila — no lo del
+                                  // pago entero, que puede tener plata en otras filas y en el
+                                  // restante libre. Son botones distintos y cada uno mueve lo
+                                  // suyo.
+                                  const montoEnvio = enviarMontoInput[envKey]
+                                    ? parseMonto(enviarMontoInput[envKey])
+                                    : Number(saldo.disponible);
+                                  const montoValido = Number.isFinite(montoEnvio) && montoEnvio > 0
+                                    && montoEnvio <= Number(saldo.disponible) + 0.01;
                                   return (
                                     <div key={saldo.id} className="bg-white border border-gray-200 rounded-lg p-1.5 space-y-1">
                                       <p className="text-[11px] text-gray-600">
@@ -2164,33 +2252,116 @@ export default function CarteraPreventivaView() {
                                           )}
                                         </div>
                                       )}
-                                      <div className="flex items-center gap-1 text-[11px]">
+                                      {/* Asociar a ESTA cuota solo si la cuota necesita dinero.
+                                          Enviar a otra persona, en cambio, va siempre: el caso
+                                          normal es una cuota ya pagada cuyo sobrante es de otra
+                                          cédula. */}
+                                      {puedeAsociarSaldo && (
+                                        <div className="flex items-center gap-1 text-[11px]">
+                                          <button
+                                            onClick={() => handleAsociarSaldo(row, saldo, montoTodo)}
+                                            disabled={savingAction}
+                                            className="px-1.5 py-0.5 rounded bg-teal-700 text-white hover:bg-teal-800 disabled:opacity-50"
+                                          >
+                                            {cuotaRestante && cuotaRestante < saldo.disponible ? "Todo lo que falta" : "Todo"}
+                                          </button>
+                                          <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            placeholder="otro $"
+                                            value={saldoOtroValor[otroKey] || ""}
+                                            onChange={(e) => setSaldoOtroValor((prev) => ({ ...prev, [otroKey]: e.target.value }))}
+                                            onBlur={(e) => setSaldoOtroValor((prev) => ({ ...prev, [otroKey]: formatMonto(e.target.value) }))}
+                                            className="w-24 border border-gray-300 rounded px-1 py-0.5"
+                                          />
+                                          <button
+                                            onClick={() => {
+                                              const monto = parseMonto(saldoOtroValor[otroKey]);
+                                              if (Number.isFinite(monto) && monto > 0) handleAsociarSaldo(row, saldo, monto);
+                                            }}
+                                            disabled={savingAction}
+                                            className="px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                                          >
+                                            OK
+                                          </button>
+                                        </div>
+                                      )}
+                                      <div className="pt-1 border-t border-gray-100">
                                         <button
-                                          onClick={() => handleAsociarSaldo(row, saldo, montoTodo)}
-                                          disabled={savingAction}
-                                          className="px-1.5 py-0.5 rounded bg-teal-700 text-white hover:bg-teal-800 disabled:opacity-50"
+                                          onClick={() => setEnviarOpen((prev) => ({ ...prev, [envKey]: !prev[envKey] }))}
+                                          className="text-[11px] px-1.5 py-0.5 rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50 active:scale-95 transition-all duration-200 ease-(--ease-spring)"
                                         >
-                                          {cuotaRestante && cuotaRestante < saldo.disponible ? "Todo lo que falta" : "Todo"}
+                                          {enviarOpen[envKey] ? "Ocultar envío" : "Enviar a otro documento"}
                                         </button>
-                                        <input
-                                          type="text"
-                                          inputMode="numeric"
-                                          placeholder="otro $"
-                                          value={saldoOtroValor[otroKey] || ""}
-                                          onChange={(e) => setSaldoOtroValor((prev) => ({ ...prev, [otroKey]: e.target.value }))}
-                                          onBlur={(e) => setSaldoOtroValor((prev) => ({ ...prev, [otroKey]: formatMonto(e.target.value) }))}
-                                          className="w-24 border border-gray-300 rounded px-1 py-0.5"
-                                        />
-                                        <button
-                                          onClick={() => {
-                                            const monto = parseMonto(saldoOtroValor[otroKey]);
-                                            if (Number.isFinite(monto) && monto > 0) handleAsociarSaldo(row, saldo, monto);
-                                          }}
-                                          disabled={savingAction}
-                                          className="px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
-                                        >
-                                          OK
-                                        </button>
+                                        {enviarOpen[envKey] && (
+                                          <div className="animate-fade-in mt-1 space-y-1 bg-indigo-50/60 border border-indigo-200/80 rounded-lg p-1.5">
+                                            <div className="flex items-center gap-1">
+                                              <input
+                                                type="text"
+                                                placeholder="Documento destino"
+                                                value={enviarDocInput[envKey] || ""}
+                                                onChange={(e) => {
+                                                  setEnviarDocInput((prev) => ({ ...prev, [envKey]: e.target.value }));
+                                                  setEnviarDestino((prev) => ({ ...prev, [envKey]: null }));
+                                                }}
+                                                className="flex-1 min-w-0 text-[11px] border border-gray-300 rounded px-1 py-0.5"
+                                              />
+                                              <button
+                                                onClick={() => handleBuscarDestino(envKey, docDest)}
+                                                disabled={!docDest || enviarBuscando[envKey]}
+                                                className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                                              >
+                                                {enviarBuscando[envKey] ? "..." : "Buscar"}
+                                              </button>
+                                            </div>
+                                            {destino && (
+                                              destino.inscripciones.length === 0 ? (
+                                                <p className="text-[11px] text-red-600">
+                                                  Ese documento no tiene cuotas abiertas en la cartera: la plata no se
+                                                  vería en ninguna pantalla.
+                                                </p>
+                                              ) : (
+                                                <>
+                                                  {/* El nombre a la vista es lo único que deja notar
+                                                      que se erró el documento antes de mandarle plata
+                                                      a un desconocido. */}
+                                                  <p className="text-[11px] text-indigo-900">✓ {fmt(destino.cliente)}</p>
+                                                  <p className="text-[11px] text-indigo-700">
+                                                    {destino.inscripciones.length} inscripción(es) con cuotas abiertas
+                                                    ({destino.inscripciones.join(", ")}) · debe {fmtMonto(destino.debe)}
+                                                  </p>
+                                                  <div className="flex items-center gap-1">
+                                                    <input
+                                                      type="text"
+                                                      inputMode="numeric"
+                                                      placeholder={formatMonto(saldo.disponible)}
+                                                      value={enviarMontoInput[envKey] || ""}
+                                                      onChange={(e) => setEnviarMontoInput((prev) => ({ ...prev, [envKey]: e.target.value }))}
+                                                      onBlur={(e) => setEnviarMontoInput((prev) => ({ ...prev, [envKey]: formatMonto(e.target.value) }))}
+                                                      className="w-24 text-[11px] border border-gray-300 rounded px-1 py-0.5"
+                                                    />
+                                                    <button
+                                                      onClick={() => handleEnviarSaldoFavor(row, saldo, envKey, docDest, montoEnvio)}
+                                                      disabled={savingEnvio || !montoValido}
+                                                      title={montoValido ? undefined : `Ese saldo solo tiene ${fmtMonto(saldo.disponible)} disponibles`}
+                                                      className="text-[11px] px-1.5 py-0.5 rounded bg-indigo-700 text-white hover:bg-indigo-800 disabled:opacity-50"
+                                                    >
+                                                      {savingEnvio ? "Enviando..." : "Enviar saldo"}
+                                                    </button>
+                                                  </div>
+                                                  <p className="text-[11px] text-gray-500">
+                                                    Por defecto se envía todo lo disponible de este saldo. La plata llega
+                                                    como saldo a favor de esa persona y allá se asocia a la cuota que
+                                                    corresponda.
+                                                  </p>
+                                                </>
+                                              )
+                                            )}
+                                            {enviarError[envKey] && (
+                                              <p className="text-[11px] text-red-600">{enviarError[envKey]}</p>
+                                            )}
+                                          </div>
+                                        )}
                                       </div>
                                     </div>
                                   );
@@ -2240,7 +2411,7 @@ export default function CarteraPreventivaView() {
                         {marcaFila(row.llave)}
                         {rowMessage[row.llave] && <span className="text-[11px] text-green-700">{rowMessage[row.llave]}</span>}
                         {rowError[row.llave] && <span className="text-[11px] text-red-600">{rowError[row.llave]}</span>}
-                        {!pendiente && !necesitaUltimaCuota(row) && !cierreOpen[row.llave] && !puedeDescartar && !puedeAsociarSaldo && !rowMessage[row.llave] && (
+                        {!pendiente && !necesitaUltimaCuota(row) && !cierreOpen[row.llave] && !puedeDescartar && !tieneSaldo && !rowMessage[row.llave] && (
                           <span className="text-xs text-gray-400">—</span>
                         )}
                       </div>
