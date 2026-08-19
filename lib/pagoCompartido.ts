@@ -332,6 +332,24 @@ export function expandirRenglones(
       // edita y el que el pipeline lee; en los demás va el de la inscripción que
       // esa persona pagó, y son de solo lectura.
       incp: r.principal ? row.incp : r.incp,
+      // La columna Cruce, por renglón: el `cliente` de la cuota que le toca a esta
+      // persona, el mismo dato del que ya salen el documento y el INCP.
+      //
+      // ⚠️ NO se parte el campo `cruce` por su separador. Desde el 19 de agosto el
+      // pipeline escribe ahí TODOS los nombres a los que llegó el pago
+      // (`"Guillermo … | Yanci …"`), y está bien que sea así: ese campo describe el
+      // PAGO entero y quien consulte la tabla directo necesita ver a los dos.
+      // Repartirlo cortándolo ataría la pantalla al formato de ese texto; saliendo de
+      // la cuota, se ve igual antes y después de que ese cambio se despliegue.
+      cruce: r.titular,
+      // Correo(2) es el resultado de buscar EL CORREO DEL PAGO en la hoja del banco,
+      // y el pago tiene un solo correo: no existe un Correo(2) de la otra persona.
+      // Dejar el del pagador al lado del INCP de ella se lee como un cruce
+      // discrepante —dos señales que no coinciden— sin serlo, y alguien va a intentar
+      // "corregirlo". Se vacía lo que es RESULTADO DE CRUCE y apunta a otra persona;
+      // lo que describe al pago (correo, teléfono, programa, códigos, fecha) se repite
+      // en los dos renglones a propósito.
+      correo_2: r.principal ? row.correo_2 : null,
       renglon_id: `${mk}#${i}`,
       compartido: true,
       titular: r.titular,
