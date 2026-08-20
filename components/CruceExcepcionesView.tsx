@@ -175,6 +175,8 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
   const [docSaving, setDocSaving]             = useState<string | null>(null);
   const [docMessage, setDocMessage]           = useState<Record<string, string>>({});
   const [docError, setDocError]               = useState<Record<string, string>>({});
+  const [reabrirOpen, setReabrirOpen]         = useState<Record<string, boolean>>({});
+  const [reabriendoKey, setReabriendoKey]     = useState<string | null>(null);
   const searchTimeout                     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef                = useRef<AbortController | null>(null);
   const tableContainerRef                 = useRef<HTMLDivElement>(null);
@@ -487,6 +489,38 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
       }));
     } finally {
       setSavingKey(null);
+    }
+  };
+
+  // "Identificar": revierte el cierre a mano y devuelve la fila al trabajo. No sale
+  // de Excepciones (`pendiente` también vive acá), así que el contador no se mueve;
+  // lo que cambia es que vuelve a ser editable.
+  const handleReabrir = async (row: ExcepcionRow) => {
+    setReabriendoKey(row.matching_key);
+    setRowActionError((prev) => ({ ...prev, [row.matching_key]: "" }));
+    try {
+      const res = await fetch("/api/cruce/exceptions/reabrir", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matching_key: row.matching_key }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al identificar");
+      setReabrirOpen((prev) => ({ ...prev, [row.matching_key]: false }));
+      // INCP, Correo(2) y el motivo se conservan tal cual (los conserva también la
+      // ruta): la fila vuelve al trabajo con lo que ya se sabía a la vista.
+      setData((prev) => prev.map((r) => r.matching_key === row.matching_key
+        ? { ...r, estado_cruce: "pendiente" }
+        : r));
+      // Acción sobre UN pago → reproceso puntual (spec "Reproceso de un solo pago").
+      fireTrigger(row.matching_key, { matchingKey: row.matching_key });
+    } catch (err) {
+      setRowActionError((prev) => ({
+        ...prev,
+        [row.matching_key]: err instanceof Error ? err.message : "Error inesperado",
+      }));
+    } finally {
+      setReabriendoKey(null);
     }
   };
 
@@ -938,9 +972,40 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
                             Corrección guardada. La fila sale de Excepciones al terminar el recálculo.
                           </span>
                         ) : isResuelta ? (
-                          <span className="text-[11px] text-gray-400">
-                            Cerrada a mano — no requiere acción.
-                          </span>
+                          <>
+                            <span className="text-[11px] text-gray-400">
+                              Cerrada a mano — no requiere acción.
+                            </span>
+                            <button
+                              onClick={() => setReabrirOpen((prev) => ({ ...prev, [row.matching_key]: !prev[row.matching_key] }))}
+                              disabled={reabriendoKey === row.matching_key}
+                              className="text-xs px-2.5 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 disabled:active:scale-100"
+                            >
+                              {reabrirOpen[row.matching_key] ? "Cancelar" : "Identificar"}
+                            </button>
+                            {reabrirOpen[row.matching_key] && (
+                              <div className="animate-fade-in bg-amber-50/60 border border-amber-200/80 rounded-lg p-2 space-y-1.5">
+                                <p className="text-xs text-gray-700">
+                                  Se va a revertir la decisión de quien marcó este pago como no identificado.
+                                  Vuelve a ser editable, conservando su INCP, su Correo(2) y su motivo.
+                                </p>
+                                {/* Mientras está sin identificar el pago NO se sella. Apenas quede
+                                    `cruzado` entra a contar la ventana normal, y la mayoría de estos
+                                    111 son pagos viejos. */}
+                                <p className="text-xs text-amber-800">
+                                  ⏰ Si queda identificado y no se aplica hoy a una cuota, la corrida de
+                                  mañana lo sella y después no se puede aplicar ni a mano.
+                                </p>
+                                <button
+                                  onClick={() => handleReabrir(row)}
+                                  disabled={reabriendoKey === row.matching_key}
+                                  className="text-xs px-2.5 py-1.5 rounded-lg bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 disabled:active:scale-100"
+                                >
+                                  {reabriendoKey === row.matching_key ? "Identificando..." : "Sí, identificar"}
+                                </button>
+                              </div>
+                            )}
+                          </>
                         ) : (
                         <>
                         <textarea

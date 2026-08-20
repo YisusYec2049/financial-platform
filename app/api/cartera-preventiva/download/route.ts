@@ -57,7 +57,9 @@ export async function GET(req: NextRequest) {
     if (search) {
       query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%,codigo_transaccion_1.ilike.%${search}%,inscrip.ilike.%${search}%`);
     }
-    if (estado === "resuelta") query = query.not("fecha_pago", "is", null);
+    // Ver GET /api/cartera-preventiva: "Resuelta" excluye las ya cerradas, o si no
+    // es un superconjunto de "Cerradas" y la descarga no coincide con la pantalla.
+    if (estado === "resuelta") query = query.not("fecha_pago", "is", null).is("pago_confirmado", null);
     else if (estado === "pendiente") query = query.is("fecha_pago", null);
     // "Cerradas": pago_confirmado solo lo llena una persona al cerrar la cuota
     // ("Cerrar Cuota" por fila o "Cerrar Cartera" en bloque), así que distingue

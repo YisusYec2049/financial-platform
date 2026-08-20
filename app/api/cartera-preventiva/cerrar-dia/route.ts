@@ -98,8 +98,15 @@ export async function POST(req: NextRequest) {
     }
 
     if (search) query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%,codigo_transaccion_1.ilike.%${search}%,inscrip.ilike.%${search}%`);
-    if (estado === "resuelta") query = query.not("fecha_pago", "is", null);
+    // Las 3 ramas tienen que ser las mismas de la pantalla (ver GET
+    // /api/cartera-preventiva): este endpoint decide QUÉ cuotas cierra a partir de
+    // los filtros de la vista, así que si divergen escribe sobre un conjunto
+    // distinto del que la persona está viendo — el fallo del 2026-08-03 con el
+    // filtro de Día del Cruce. Faltaba la rama de "Cerradas": con esa opción en
+    // pantalla, el alcance del botón era el de "Todas" dentro del rango.
+    if (estado === "resuelta") query = query.not("fecha_pago", "is", null).is("pago_confirmado", null);
     else if (estado === "pendiente") query = query.is("fecha_pago", null);
+    else if (estado === "cerrada") query = query.not("pago_confirmado", "is", null);
     if (vencFrom) query = query.gte("fecha_vencimiento", vencFrom);
     if (vencTo)   query = query.lte("fecha_vencimiento", vencTo);
     if (pagoParcial) query = query.lt("diferencia", 0);

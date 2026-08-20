@@ -50,7 +50,11 @@ export async function GET(req: NextRequest) {
       query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%,codigo_transaccion_1.ilike.%${search}%,inscrip.ilike.%${search}%`);
     }
 
-    if (estado === "resuelta") query = query.not("fecha_pago", "is", null);
+    // "Resuelta" = tiene pago identificado y NADIE la ha cerrado todavía, o sea las
+    // que están listas para cerrar. Sin el segundo filtro, "Cerradas" es un
+    // subconjunto de "Resuelta" y el 84% de lo que muestra es trabajo terminado
+    // (medido el 2026-08-20: 1.367 resueltas, 1.146 de ellas ya cerradas).
+    if (estado === "resuelta") query = query.not("fecha_pago", "is", null).is("pago_confirmado", null);
     else if (estado === "pendiente") query = query.is("fecha_pago", null);
     // "Cerradas": pago_confirmado solo lo llena una persona al cerrar la cuota
     // ("Cerrar Cuota" por fila o "Cerrar Cartera" en bloque), así que distingue
