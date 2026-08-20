@@ -3,6 +3,12 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sanitizeSearch } from "@/lib/search";
+import {
+  parseFiltroDiferencia,
+  OR_LE_FALTA_PLATA,
+  gruposDeCuotas,
+  filasPorLlave,
+} from "@/lib/carteraDiferencia";
 
 export async function GET(req: NextRequest) {
   const { user, response } = await requireAuth(req);
@@ -22,6 +28,7 @@ export async function GET(req: NextRequest) {
   const conNotificacion = searchParams.get("con_notificacion") === "1";
   const wompiTipo    = searchParams.get("wompi_tipo") || "";
   const multiCuota   = searchParams.get("multi_cuota") === "1";
+  const diferencia   = parseFiltroDiferencia(searchParams.get("diferencia"));
 
   const supabase = createAdminClient();
   const MAX_ROWS = 50_000;
@@ -80,6 +87,11 @@ export async function GET(req: NextRequest) {
     // Ver comentario en GET /api/cartera-preventiva: cuenta cuotas, no renglones.
     if (multiCuota) query = query.gt("cuotas_inscripcion", 1);
 
+    // Filtro "Diferencia" (spec 2026-08-19), el mismo de la pantalla: el umbral de
+    // "le falta plata" depende de la moneda de la cuota. Ver lib/carteraDiferencia.ts.
+    if (diferencia === "falta") query = query.or(OR_LE_FALTA_PLATA);
+    else if (diferencia === "sobra") query = query.gte("diferencia", 1);
+
     const { data, error } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     if (!data || data.length === 0) break;
@@ -99,12 +111,30 @@ export async function GET(req: NextRequest) {
     return true;
   });
 
+  // Con el filtro de Diferencia puesto, el Excel tiene que traer lo mismo que la
+  // pantalla: cada cuota que califica baja con sus líneas derivadas pegadas debajo
+  // (una cuota de deuda recién nacida tiene la `diferencia` en NULL y por sí sola no
+  // pasaría el filtro). Ver el camino agrupado de GET /api/cartera-preventiva.
+  let salida = deduped;
+  if (diferencia && deduped.length > 0) {
+    const { grupos, error: gruposError } = await gruposDeCuotas(
+      supabase,
+      deduped.map((r) => ({ llave: (r.llave as string) ?? null, inscrip: (r.inscrip as string) ?? null })),
+    );
+    if (gruposError) return NextResponse.json({ error: gruposError }, { status: 500 });
+    const llaves = grupos.flatMap((g) => g.filas.map((f) => f.llave));
+    const { filas, error: filasError } = await filasPorLlave(supabase, llaves);
+    if (filasError) return NextResponse.json({ error: filasError }, { status: 500 });
+    const porLlave = new Map(filas.map((f) => [f.llave as string, f]));
+    salida = llaves.map((ll) => porLlave.get(ll)).filter(Boolean) as Record<string, unknown>[];
+  }
+
   await logAudit({
     user_email: user.email ?? "unknown",
     action: "download",
-    filters: { search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, wompiTipo, multiCuota, view: "cartera_preventiva" },
-    result_count: deduped.length,
+    filters: { search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, wompiTipo, multiCuota, diferencia, view: "cartera_preventiva" },
+    result_count: salida.length,
   });
 
-  return NextResponse.json({ data: deduped, count: deduped.length, truncated });
+  return NextResponse.json({ data: salida, count: salida.length, truncated });
 }

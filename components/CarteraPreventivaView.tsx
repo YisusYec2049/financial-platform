@@ -230,6 +230,9 @@ const ACTIVAR_MAX_MS   = 5 * 60 * 1000;
 export default function CarteraPreventivaView() {
   const [data, setData]                 = useState<CarteraPreventivaRow[]>([]);
   const [total, setTotal]               = useState(0);
+  // Solo con el filtro de Diferencia puesto: ahí `total` cuenta CUOTAS y esto cuenta
+  // los renglones que se ven (cada cuota arrastra sus líneas derivadas).
+  const [renglones, setRenglones]       = useState<number | null>(null);
   const [page, setPage]                 = useState(1);
   const [loading, setLoading]           = useState(false);
   const [search, setSearch]             = useSessionState("cartera_preventiva.search", "");
@@ -245,6 +248,8 @@ export default function CarteraPreventivaView() {
   const [cruceTo, setCruceTo]           = useSessionState("cartera_preventiva.cruceTo", "");
   const [conNotificacion, setConNotificacion] = useSessionState("cartera_preventiva.conNotificacion", false);
   const [multiCuota, setMultiCuota] = useSessionState("cartera_preventiva.multiCuota", false);
+  // "" | "falta" | "sobra" — ver lib/carteraDiferencia.ts
+  const [diferencia, setDiferencia] = useSessionState("cartera_preventiva.diferencia", "");
   const [medios, setMedios]             = useState<{ label: string; value: string }[]>([]);
   const [fetchError, setFetchError]     = useState("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -325,6 +330,7 @@ export default function CarteraPreventivaView() {
     if (cruceTo)      params.set("cruce_to", cruceTo);
     if (conNotificacion) params.set("con_notificacion", "1");
     if (multiCuota)   params.set("multi_cuota", "1");
+    if (diferencia)   params.set("diferencia", diferencia);
     if (medioPago === "WOMPI%" && wompiTipo) params.set("wompi_tipo", wompiTipo);
     params.set("page", String(currentPage));
 
@@ -334,13 +340,14 @@ export default function CarteraPreventivaView() {
       if (!res.ok) throw new Error(json.error || "Error al cargar datos");
       setData(json.data || []);
       setTotal(json.count || 0);
+      setRenglones(typeof json.renglones === "number" ? json.renglones : null);
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
       setFetchError(err instanceof Error ? err.message : "Error inesperado");
     } finally {
       setLoading(false);
     }
-  }, [search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, multiCuota, wompiTipo]);
+  }, [search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, multiCuota, diferencia, wompiTipo]);
 
   const fetchMedios = useCallback(async () => {
     const res  = await fetch("/api/cartera-preventiva/medios-pago");
@@ -449,7 +456,7 @@ export default function CarteraPreventivaView() {
       fetchData(1);
     }, 400);
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
-  }, [search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, multiCuota, wompiTipo, fetchData]);
+  }, [search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, multiCuota, diferencia, wompiTipo, fetchData]);
 
 
   useEffect(() => {
@@ -476,6 +483,7 @@ export default function CarteraPreventivaView() {
     if (cruceTo)      params.set("cruce_to", cruceTo);
     if (conNotificacion) params.set("con_notificacion", "1");
     if (multiCuota)   params.set("multi_cuota", "1");
+    if (diferencia)   params.set("diferencia", diferencia);
     if (medioPago === "WOMPI%" && wompiTipo) params.set("wompi_tipo", wompiTipo);
     return params;
   };
@@ -1609,6 +1617,19 @@ export default function CarteraPreventivaView() {
             <option value="automatico" className="text-gray-900">Automáticos</option>
             <option value="manual" className="text-gray-900">Manuales</option>
           </select>
+          {/* Diferencia: el umbral de "le falta plata" depende de la moneda de la
+              cuota (ver lib/carteraDiferencia.ts). Cada cuota que califica baja con
+              sus líneas derivadas pegadas debajo, aunque esas no califiquen solas. */}
+          <select
+            value={diferencia}
+            onChange={(e) => { setDiferencia(e.target.value); setPage(1); }}
+            className={INPUT}
+            title="Le falta plata: deuda de $50.000 o más (15 USD o más en cuotas en dólares). Le sobra plata: diferencia de $1 en adelante."
+          >
+            <option value="" className="text-gray-900">Cualquier diferencia</option>
+            <option value="falta" className="text-gray-900">Le falta plata</option>
+            <option value="sobra" className="text-gray-900">Le sobra plata</option>
+          </select>
         </div>
 
         <div className="flex gap-6 flex-wrap text-sm text-gray-600 items-center">
@@ -1663,9 +1684,9 @@ export default function CarteraPreventivaView() {
             />
             <span className="font-medium">Inscripciones con varias cuotas</span>
           </label>
-          {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || medioPago || payFrom || payTo || cruceFrom || cruceTo || conNotificacion || multiCuota || wompiTipo) && (
+          {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || medioPago || payFrom || payTo || cruceFrom || cruceTo || conNotificacion || multiCuota || diferencia || wompiTipo) && (
             <button
-              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setMedioPago(""); setPayFrom(""); setPayTo(""); setCruceFrom(""); setCruceTo(""); setConNotificacion(false); setMultiCuota(false); setWompiTipo(""); setPage(1); }}
+              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setMedioPago(""); setPayFrom(""); setPayTo(""); setCruceFrom(""); setCruceTo(""); setConNotificacion(false); setMultiCuota(false); setDiferencia(""); setWompiTipo(""); setPage(1); }}
               className="text-red-500 hover:text-red-700 text-xs underline"
             >
               Limpiar filtros
@@ -1676,7 +1697,13 @@ export default function CarteraPreventivaView() {
 
       <div className="px-1 flex items-center justify-between gap-3">
         <span className="text-sm text-gray-500">
-          {loading ? "Cargando..." : `${total.toLocaleString("es-CO")} registros encontrados`}
+          {loading
+            ? "Cargando..."
+            : diferencia && renglones !== null
+              // Con el filtro puesto se pagina por CUOTA, no por renglón: una cuota
+              // arrastra sus líneas derivadas, así que los dos números no coinciden.
+              ? `${total.toLocaleString("es-CO")} cuotas (${renglones.toLocaleString("es-CO")} renglones)`
+              : `${total.toLocaleString("es-CO")} registros encontrados`}
         </span>
 
         <div ref={dropdownRef} className="relative">

@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sanitizeSearch } from "@/lib/search";
+import { parseFiltroDiferencia, OR_LE_FALTA_PLATA } from "@/lib/carteraDiferencia";
 
 // "Cerrar Cartera" (spec 23/07 §2.2) — medida provisional hasta que todo esté
 // completamente operativo.
@@ -59,6 +60,7 @@ export async function POST(req: NextRequest) {
   const conNotificacion = body?.con_notificacion === "1" || body?.con_notificacion === true;
   const wompiTipo    = typeof body?.wompi_tipo === "string" ? body.wompi_tipo : "";
   const multiCuota   = body?.multi_cuota === "1" || body?.multi_cuota === true;
+  const diferencia   = parseFiltroDiferencia(typeof body?.diferencia === "string" ? body.diferencia : "");
 
   // El día del cierre lo decide el cliente (su zona horaria), no el servidor.
   const hoy = typeof body?.dia === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.dia)
@@ -116,6 +118,16 @@ export async function POST(req: NextRequest) {
     else if (wompiTipo === "manual") query = query.eq("es_wompi_automatico", false);
     // Ver comentario en GET /api/cartera-preventiva: cuenta cuotas, no renglones.
     if (multiCuota) query = query.gt("cuotas_inscripcion", 1);
+    // Filtro "Diferencia" (spec 2026-08-19). Va acá por la misma razón que el de
+    // "Día del Cruce": si este endpoint no lo leyera, cerrar con el filtro puesto
+    // escribiría plata sobre un conjunto MÁS AMPLIO que el que la persona ve — que
+    // es exactamente el fallo del 2026-08-03, al revés.
+    // ⚠️ Acá NO se aplica la expansión madre/hija de la pantalla, a propósito: esa
+    // expansión es una ayuda para leer (mostrar la deuda junto a la cuota que la
+    // explica), no una ampliación del conjunto de trabajo. Una línea derivada se
+    // cierra solo si califica por sí misma o si se la alcanza sin este filtro.
+    if (diferencia === "falta") query = query.or(OR_LE_FALTA_PLATA);
+    else if (diferencia === "sobra") query = query.gte("diferencia", 1);
 
     // Desempate obligatorio: sin una columna única al final del orden, el corte
     // entre lotes pierde filas en silencio — y acá una fila perdida es una cuota
@@ -172,7 +184,7 @@ export async function POST(req: NextRequest) {
   await logAudit({
     user_email: user.email ?? "unknown",
     action: "cerrar_cartera_dia",
-    filters: { dia: hoy, cruceFrom, cruceTo, search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, conNotificacion, wompiTipo, multiCuota, view: "cartera_preventiva" },
+    filters: { dia: hoy, cruceFrom, cruceTo, search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, conNotificacion, wompiTipo, multiCuota, diferencia, view: "cartera_preventiva" },
     result_count: cerradas,
   });
 
