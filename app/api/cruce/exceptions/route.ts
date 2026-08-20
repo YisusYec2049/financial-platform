@@ -101,9 +101,14 @@ export async function PATCH(req: NextRequest) {
   }
 
   const now = new Date().toISOString();
+  // `no_identificable` CONSERVA su motivo a propósito: ahí es la razón por la que se
+  // cerró, y el dropdown y la auditoría filtran por él. `cruzado` lo borra: el pipeline
+  // nunca produce esa combinación (en `cruzar.py` estado y motivo se asignan juntos, y
+  // la rama que cierra `cruzado` deja el motivo en null), así que dejarlo puesto es un
+  // dato que solo escribe esta ruta y que se lee como una excepción todavía abierta.
   const update = noIdentificable
     ? { estado_cruce: "no_identificable", corregido_manual: true, corregido_manual_at: now }
-    : { incp, correo_2: correo2, nombre, metodo_de_pago: metodoDePago, ci, estado_cruce: "cruzado", corregido_manual: true, corregido_manual_at: now };
+    : { incp, correo_2: correo2, nombre, metodo_de_pago: metodoDePago, ci, estado_cruce: "cruzado", excepcion_motivo: null, corregido_manual: true, corregido_manual_at: now };
 
   const supabase = createAdminClient();
   const { error, data } = await supabase

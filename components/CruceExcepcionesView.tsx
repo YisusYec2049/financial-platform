@@ -442,8 +442,11 @@ const CruceExcepcionesView = forwardRef<CruceExcepcionesViewRef>(function CruceE
       // La fila pasa a `cruzado`, así que deja de pertenecer a esta pestaña — pero NO
       // se quita de golpe (§3): se queda marcada "recalculando…" con el valor ya
       // corregido a la vista y se va sola cuando el reproceso termina y refresca.
+      // El motivo se limpia también acá porque la ruta lo borra al pasar a `cruzado`:
+      // si no, la fila se queda a la vista con el badge de la excepción que acaba de
+      // resolverse ("no hay INCP asignada") hasta que el refetch se la lleve.
       setData((prev) => prev.map((r) => r.matching_key === row.matching_key
-        ? { ...r, incp: edit.incp, correo_2: edit.correo_2, nombre: edit.nombre, metodo_de_pago: edit.metodo_de_pago, ci: edit.ci, estado_cruce: "cruzado" }
+        ? { ...r, incp: edit.incp, correo_2: edit.correo_2, nombre: edit.nombre, metodo_de_pago: edit.metodo_de_pago, ci: edit.ci, estado_cruce: "cruzado", excepcion_motivo: null }
         : r));
       // Acción sobre UN pago → reproceso puntual (spec "Reproceso de un solo pago").
       fireTrigger(row.matching_key, { matchingKey: row.matching_key });
