@@ -9,6 +9,7 @@ import {
   gruposDeCuotas,
   filasPorLlave,
 } from "@/lib/carteraDiferencia";
+import { LIKE_PAGO_SIN_APLICAR } from "@/lib/pagoSinAplicar";
 
 export async function GET(req: NextRequest) {
   const { user, response } = await requireAuth(req);
@@ -28,6 +29,7 @@ export async function GET(req: NextRequest) {
   const conNotificacion = searchParams.get("con_notificacion") === "1";
   const wompiTipo    = searchParams.get("wompi_tipo") || "";
   const multiCuota   = searchParams.get("multi_cuota") === "1";
+  const pagoSinAplicar = searchParams.get("pago_sin_aplicar") === "1";
   const diferencia   = parseFiltroDiferencia(searchParams.get("diferencia"));
   const page          = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const pageSize      = 100;
@@ -87,6 +89,15 @@ export async function GET(req: NextRequest) {
     // lo trae la vista, calculado sobre TODA la cartera: que la persona ponga un
     // rango de fechas no cambia cuántas cuotas debe la inscripción.
     if (multiCuota) query = query.gt("cuotas_inscripcion", 1);
+
+    // "Con pago sin aplicar" (spec 2026-08-21): las cuotas que el pipeline dejó
+    // cortas por menos del umbral y avisó, porque su plata espera a que alguien la
+    // asocie a mano. Es trabajo del día y nadie las va a encontrar buscando por
+    // documento: quien revisa no sabe que existen.
+    // Va aparte del desplegable de estado a propósito — esas 3 opciones parten la
+    // cartera sin solapes (pendiente + resuelta + cerrada = total) y una cuarta que
+    // cruza las tres rompería esa cuenta.
+    if (pagoSinAplicar) query = query.like("notificacion", LIKE_PAGO_SIN_APLICAR);
 
     // Filtro "Diferencia" (spec 2026-08-19). El umbral de "le falta plata" depende de
     // la moneda de la cuota — ver lib/carteraDiferencia.ts.
@@ -193,7 +204,7 @@ export async function GET(req: NextRequest) {
   logAudit({
     user_email: user.email ?? "unknown",
     action: "query",
-    filters: { search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, wompiTipo, multiCuota, diferencia, page, view: "cartera_preventiva" },
+    filters: { search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, wompiTipo, multiCuota, pagoSinAplicar, diferencia, page, view: "cartera_preventiva" },
     result_count: count ?? 0,
   });
 

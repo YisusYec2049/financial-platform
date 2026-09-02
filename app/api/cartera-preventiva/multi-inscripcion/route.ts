@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
+import { LIKE_PAGO_SIN_APLICAR, esPagoSinAplicar } from "@/lib/pagoSinAplicar";
 
 // Panel de asociación manual (§4.1): solo debe ofrecerse cuando un documento
 // (cruce_access) tiene 2+ INSCRIPCIONES DISTINTAS con cuota pendiente — no
@@ -21,6 +22,13 @@ import { requireAuth } from "@/lib/auth";
 // un pago de consolidated_transactions cuyo payment_amount, menos lo ya
 // repartido en pago_asociaciones Y en pago_asociaciones_archivo para ese
 // matching_key, sea > 0.
+//
+// SEGUNDO CAMINO (2026-08-21): un documento entra TAMBIÉN si alguna de sus
+// cuotas trae el aviso `PAGO SIN APLICAR`, sin importar cuántas inscripciones
+// tenga. Ahí la persona suele tener UNA sola, así que la condición de "2+
+// inscripciones" no la alcanza nunca y se queda sin botón — es el caso que el
+// área reportó el 2026-08-10 con el doc 1032261753, y la única salida era la
+// base de datos.
 export async function GET(req: NextRequest) {
   const { response } = await requireAuth(req);
   if (response) return response;
@@ -29,12 +37,16 @@ export async function GET(req: NextRequest) {
   const BATCH = 1000;
   let from = 0;
   const porDocumento = new Map<string, Set<string>>();
+  const conAvisoDeEspera = new Set<string>();
 
   while (true) {
     const { data, error } = await supabase
       .from("cartera_preventiva")
-      .select("cruce_access, inscrip")
-      .is("fecha_pago", null)
+      .select("cruce_access, inscrip, fecha_pago, notificacion")
+      // ⚠️ El `.is("fecha_pago", null)` de siempre deja fuera justamente las cuotas
+      // del segundo camino: una cuota corta SÍ tiene fecha_pago (recibió el primer
+      // pago). Sin ampliarlo acá, el cambio no hace nada y parece implementado.
+      .or(`fecha_pago.is.null,notificacion.like.${LIKE_PAGO_SIN_APLICAR}`)
       .not("cruce_access", "is", null)
       .neq("cruce_access", "")
       // Sin ORDER BY, Postgres puede devolver las filas como quiera y cambiar de
@@ -51,15 +63,25 @@ export async function GET(req: NextRequest) {
 
     for (const row of data) {
       const doc = row.cruce_access as string;
-      if (!porDocumento.has(doc)) porDocumento.set(doc, new Set());
-      porDocumento.get(doc)!.add(row.inscrip as string);
+      // El primer camino sigue contando SOLO cuotas pendientes. Si se contaran
+      // también las del aviso (que ya tienen fecha_pago), un documento podría
+      // llegar a "2+ inscripciones" sumando una que ya está pagada, y el botón
+      // aparecería donde antes no aparecía por una razón distinta a esta spec.
+      if (row.fecha_pago == null) {
+        if (!porDocumento.has(doc)) porDocumento.set(doc, new Set());
+        porDocumento.get(doc)!.add(row.inscrip as string);
+      }
+      if (esPagoSinAplicar(row.notificacion as string | null)) conAvisoDeEspera.add(doc);
     }
 
     if (data.length < BATCH) break;
     from += BATCH;
   }
 
-  const candidatos = [...porDocumento.entries()].filter(([, s]) => s.size >= 2).map(([doc]) => doc);
+  const candidatos = [...new Set([
+    ...[...porDocumento.entries()].filter(([, s]) => s.size >= 2).map(([doc]) => doc),
+    ...conAvisoDeEspera,
+  ])];
   if (candidatos.length === 0) return NextResponse.json({ documentos: [] });
 
   const { data: pagos, error: pagosError } = await supabase

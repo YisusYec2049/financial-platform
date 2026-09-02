@@ -5,6 +5,7 @@ import * as XLSX from "xlsx";
 import { useSessionState } from "@/lib/useSessionState";
 import { useReproceso } from "@/lib/useReproceso";
 import { parseMonto, formatMonto } from "@/lib/monto";
+import { esPagoSinAplicar } from "@/lib/pagoSinAplicar";
 
 // Solo pregunta a Drive si llegó cartera nueva: corre sync_cartera.py y nada
 // más (~4 s) vía /api/cartera-preventiva/sync. NO recalcula el cruce — eso
@@ -183,7 +184,19 @@ type InscripcionPendiente = {
   valor_cuota: number;
   sistema_financiero: string | null;
   fecha_vencimiento: string;
+  fecha_pago: string | null;
+  diferencia: number | null;
 };
+
+// Lo que le falta de verdad a una cuota candidata del panel. Desde el 2026-08-21 la
+// lista incluye cuotas que YA recibieron plata y quedaron cortas (las del aviso
+// "PAGO SIN APLICAR"): ahí `valor_a_cobrar` sigue siendo el valor entero de la cuota,
+// así que ofrecerlo como lo que debe se equivoca por varios ceros —$1.011.818 cuando
+// faltan $11.818—. Mismo criterio que `cuotaRestante` en la fila.
+const faltaDeCuota = (ins: InscripcionPendiente) =>
+  ins.fecha_pago && ins.diferencia != null && ins.diferencia < 0
+    ? Math.abs(ins.diferencia)
+    : ins.valor_a_cobrar;
 
 // Lo que se muestra al buscar el documento destino de un envío de saldo. Sale del
 // MISMO GET del panel de asociar, que ya devuelve las inscripciones con cuota
@@ -248,6 +261,7 @@ export default function CarteraPreventivaView() {
   const [cruceTo, setCruceTo]           = useSessionState("cartera_preventiva.cruceTo", "");
   const [conNotificacion, setConNotificacion] = useSessionState("cartera_preventiva.conNotificacion", false);
   const [multiCuota, setMultiCuota] = useSessionState("cartera_preventiva.multiCuota", false);
+  const [pagoSinAplicar, setPagoSinAplicar] = useSessionState("cartera_preventiva.pagoSinAplicar", false);
   // "" | "falta" | "sobra" — ver lib/carteraDiferencia.ts
   const [diferencia, setDiferencia] = useSessionState("cartera_preventiva.diferencia", "");
   const [medios, setMedios]             = useState<{ label: string; value: string }[]>([]);
@@ -330,6 +344,7 @@ export default function CarteraPreventivaView() {
     if (cruceTo)      params.set("cruce_to", cruceTo);
     if (conNotificacion) params.set("con_notificacion", "1");
     if (multiCuota)   params.set("multi_cuota", "1");
+    if (pagoSinAplicar) params.set("pago_sin_aplicar", "1");
     if (diferencia)   params.set("diferencia", diferencia);
     if (medioPago === "WOMPI%" && wompiTipo) params.set("wompi_tipo", wompiTipo);
     params.set("page", String(currentPage));
@@ -347,7 +362,7 @@ export default function CarteraPreventivaView() {
     } finally {
       setLoading(false);
     }
-  }, [search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, multiCuota, diferencia, wompiTipo]);
+  }, [search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, cruceFrom, cruceTo, conNotificacion, multiCuota, pagoSinAplicar, diferencia, wompiTipo]);
 
   const fetchMedios = useCallback(async () => {
     const res  = await fetch("/api/cartera-preventiva/medios-pago");
@@ -483,6 +498,7 @@ export default function CarteraPreventivaView() {
     if (cruceTo)      params.set("cruce_to", cruceTo);
     if (conNotificacion) params.set("con_notificacion", "1");
     if (multiCuota)   params.set("multi_cuota", "1");
+    if (pagoSinAplicar) params.set("pago_sin_aplicar", "1");
     if (diferencia)   params.set("diferencia", diferencia);
     if (medioPago === "WOMPI%" && wompiTipo) params.set("wompi_tipo", wompiTipo);
     return params;
@@ -620,6 +636,18 @@ export default function CarteraPreventivaView() {
     if (row.notificacion === "FALTA DE PAGO") {
       return null;
     }
+    // El aviso del pipeline (2026-08-21): esta cuota quedó corta por menos del
+    // umbral, así que su cuota de deuda no nació y el pago que llegó después NO se
+    // aplica solo. Es el único aviso de la pantalla que pide una acción concreta
+    // —asociar esa plata a mano—, así que no puede verse más apagado que un cierre
+    // manual. Por PREFIJO: el monto viene pegado dentro del texto y cambia con él.
+    if (esPagoSinAplicar(row.notificacion)) {
+      return (
+        <span className="bg-amber-100 text-amber-800 text-xs px-2 py-0.5 rounded-full whitespace-nowrap font-medium">
+          {row.notificacion}
+        </span>
+      );
+    }
     // Regla #8: cierre manual ya aplicado por el pipeline (valor_pago =
     // valor_a_cobrar, medio_pago = 'Cartera').
     if (row.notificacion === "CARTERA") {
@@ -734,7 +762,7 @@ export default function CarteraPreventivaView() {
         [key]: {
           cliente: inscripciones.find((i) => i.cliente)?.cliente ?? null,
           inscripciones: [...new Set(inscripciones.map((i) => i.inscrip))],
-          debe: inscripciones.reduce((a, i) => a + Number(i.valor_a_cobrar || 0), 0),
+          debe: inscripciones.reduce((a, i) => a + Number(faltaDeCuota(i) || 0), 0),
         },
       }));
     } catch (err) {
@@ -1684,9 +1712,23 @@ export default function CarteraPreventivaView() {
             />
             <span className="font-medium">Inscripciones con varias cuotas</span>
           </label>
-          {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || medioPago || payFrom || payTo || cruceFrom || cruceTo || conNotificacion || multiCuota || diferencia || wompiTipo) && (
+          {/* El pipeline avisa en `notificacion` cuando dejó una cuota corta por menos
+              del umbral y por eso NO aplicó solo el pago siguiente. Es trabajo del día:
+              nadie las encuentra buscando por documento, porque quien revisa no sabe
+              que existen. Va aparte del desplegable de estado a propósito — esas 3
+              opciones parten la cartera sin solapes. */}
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={pagoSinAplicar}
+              onChange={(e) => { setPagoSinAplicar(e.target.checked); setPage(1); }}
+              className="rounded border-gray-300 text-brand-600 focus:ring-brand-500/50"
+            />
+            <span className="font-medium">Con pago sin aplicar</span>
+          </label>
+          {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || medioPago || payFrom || payTo || cruceFrom || cruceTo || conNotificacion || multiCuota || pagoSinAplicar || diferencia || wompiTipo) && (
             <button
-              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setMedioPago(""); setPayFrom(""); setPayTo(""); setCruceFrom(""); setCruceTo(""); setConNotificacion(false); setMultiCuota(false); setDiferencia(""); setWompiTipo(""); setPage(1); }}
+              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setMedioPago(""); setPayFrom(""); setPayTo(""); setCruceFrom(""); setCruceTo(""); setConNotificacion(false); setMultiCuota(false); setPagoSinAplicar(false); setDiferencia(""); setWompiTipo(""); setPage(1); }}
               className="text-red-500 hover:text-red-700 text-xs underline"
             >
               Limpiar filtros
@@ -1793,6 +1835,10 @@ export default function CarteraPreventivaView() {
                   const parcial = isPagoParcial(row);
                   const saldoFavor = isSaldoFavor(row);
                   const pendiente = !row.fecha_pago;
+                  // La cuota que quedó corta y tiene plata esperando (2026-08-21). NO es
+                  // `pendiente` —recibió el primer pago—, así que sin esto el botón
+                  // "Asociar" no se pintaría justo en la fila que lo necesita.
+                  const avisoSinAplicar = esPagoSinAplicar(row.notificacion);
                   // Cerrada = alguien la cerró y `pago` ya refleja el valor_pago
                   // (si el pago cambió después, vuelve a ofrecerse el cierre).
                   const cerrada = row.pago_confirmado != null && row.pago_confirmado === row.valor_pago;
@@ -2051,7 +2097,7 @@ export default function CarteraPreventivaView() {
                             </button>
                           </div>
                         )}
-                        {puedeAsociar && pendiente && (
+                        {puedeAsociar && (pendiente || avisoSinAplicar) && (
                           <button
                             onClick={() => toggleAsociarPanel(row)}
                             disabled={saving}
@@ -2077,14 +2123,15 @@ export default function CarteraPreventivaView() {
                                       {fmt(pago.transaction_code_1)} · {fmt(pago.payment_date)} · restante {fmtMonto(pago.restante)}
                                     </p>
                                     {(asociarData[row.cruce_access]?.inscripciones || []).map((ins) => {
-                                      const exacto = Math.abs(ins.valor_a_cobrar - pago.restante) < 1;
+                                      const falta  = faltaDeCuota(ins);
+                                      const exacto = Math.abs(falta - pago.restante) < 1;
                                       const actionKey = `${pago.matching_key}:${ins.llave}`;
                                       const savingAction = rowSaving === actionKey;
                                       const otroValorKey = `${pago.matching_key}:${ins.llave}`;
                                       return (
                                         <div key={ins.llave} className="flex items-center justify-between gap-1 text-[11px]">
                                           <span className={exacto ? "text-emerald-700 font-medium" : "text-gray-600"}>
-                                            {ins.inscrip} ({fmt(ins.sistema_financiero)}) — {fmtMonto(ins.valor_a_cobrar)}
+                                            {ins.inscrip} ({fmt(ins.sistema_financiero)}) — {fmtMonto(falta)}
                                             {exacto && " ✓ calza"}
                                           </span>
                                           <div className="flex items-center gap-1">

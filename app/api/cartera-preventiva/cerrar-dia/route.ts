@@ -4,6 +4,7 @@ import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sanitizeSearch } from "@/lib/search";
 import { parseFiltroDiferencia, OR_LE_FALTA_PLATA } from "@/lib/carteraDiferencia";
+import { LIKE_PAGO_SIN_APLICAR } from "@/lib/pagoSinAplicar";
 
 // "Cerrar Cartera" (spec 23/07 §2.2) — medida provisional hasta que todo esté
 // completamente operativo.
@@ -60,6 +61,7 @@ export async function POST(req: NextRequest) {
   const conNotificacion = body?.con_notificacion === "1" || body?.con_notificacion === true;
   const wompiTipo    = typeof body?.wompi_tipo === "string" ? body.wompi_tipo : "";
   const multiCuota   = body?.multi_cuota === "1" || body?.multi_cuota === true;
+  const pagoSinAplicar = body?.pago_sin_aplicar === "1" || body?.pago_sin_aplicar === true;
   const diferencia   = parseFiltroDiferencia(typeof body?.diferencia === "string" ? body.diferencia : "");
 
   // El día del cierre lo decide el cliente (su zona horaria), no el servidor.
@@ -125,6 +127,11 @@ export async function POST(req: NextRequest) {
     else if (wompiTipo === "manual") query = query.eq("es_wompi_automatico", false);
     // Ver comentario en GET /api/cartera-preventiva: cuenta cuotas, no renglones.
     if (multiCuota) query = query.gt("cuotas_inscripcion", 1);
+    // "Con pago sin aplicar" (spec 2026-08-21). Va acá por la misma razón que los
+    // otros dos: este endpoint decide QUÉ cuotas cierra a partir de los filtros de
+    // la pantalla, y sin leerlo cerraría el día entero teniendo a la vista un
+    // puñado de cuotas. Es el fallo del 2026-08-03 con el Día del Cruce.
+    if (pagoSinAplicar) query = query.like("notificacion", LIKE_PAGO_SIN_APLICAR);
     // Filtro "Diferencia" (spec 2026-08-19). Va acá por la misma razón que el de
     // "Día del Cruce": si este endpoint no lo leyera, cerrar con el filtro puesto
     // escribiría plata sobre un conjunto MÁS AMPLIO que el que la persona ve — que
@@ -191,7 +198,7 @@ export async function POST(req: NextRequest) {
   await logAudit({
     user_email: user.email ?? "unknown",
     action: "cerrar_cartera_dia",
-    filters: { dia: hoy, cruceFrom, cruceTo, search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, conNotificacion, wompiTipo, multiCuota, diferencia, view: "cartera_preventiva" },
+    filters: { dia: hoy, cruceFrom, cruceTo, search, estado, vencFrom, vencTo, pagoParcial, medioPago, payFrom, payTo, conNotificacion, wompiTipo, multiCuota, pagoSinAplicar, diferencia, view: "cartera_preventiva" },
     result_count: cerradas,
   });
 

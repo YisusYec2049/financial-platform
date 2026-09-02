@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { fetchSellados } from "@/lib/sellados";
+import { LIKE_PAGO_SIN_APLICAR } from "@/lib/pagoSinAplicar";
 
 // Cuánto le queda a un pago por repartir. La plata de un pago vive en TRES sitios,
 // y la cuenta tiene que mirar los tres — es la misma que hace el chequeo de cuadre
@@ -100,9 +101,16 @@ export async function GET(req: NextRequest) {
     // `cliente` lo necesita el buscador de documento destino del envío de saldo:
     // sin el nombre a la vista, quien aprieta no tiene cómo darse cuenta de que se
     // equivocó de documento y la plata aterriza en la pantalla de un desconocido.
-    .select("llave, inscrip, cliente, valor_a_cobrar, valor_cuota, sistema_financiero, fecha_vencimiento")
+    // `fecha_pago` y `diferencia` los usa la pantalla para decir cuánto le falta de
+    // verdad a la cuota: una cuota corta ya recibió plata, así que su `valor_a_cobrar`
+    // es el valor entero y ofrecerlo como lo que debe engaña por varios ceros.
+    .select("llave, inscrip, cliente, valor_a_cobrar, valor_cuota, sistema_financiero, fecha_vencimiento, fecha_pago, diferencia")
     .eq("cruce_access", documento)
-    .is("fecha_pago", null);
+    // ⚠️ Las cuotas con el aviso `PAGO SIN APLICAR` (2026-08-21) TIENEN `fecha_pago`
+    // —recibieron el primer pago y quedaron cortas por menos del umbral—, así que el
+    // filtro de siempre las dejaba fuera: el botón se ofrecía y el panel abría sin
+    // ninguna cuota a la que asociar la plata. Son el destino de esa asociación.
+    .or(`fecha_pago.is.null,notificacion.like.${LIKE_PAGO_SIN_APLICAR}`);
   if (insError) return NextResponse.json({ error: insError.message }, { status: 500 });
 
   const { data: pagos, error: pagosError } = await supabase
