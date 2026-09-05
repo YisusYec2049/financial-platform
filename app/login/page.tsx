@@ -4,9 +4,41 @@ import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 
+/* Ojo abierto / cerrado del botón de mostrar contraseña (estilo trazo, como los íconos de la vista) */
+function EyeIcon({ off }: { off: boolean }) {
+  return (
+    <svg
+      className="w-5 h-5"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {off ? (
+        <>
+          <path d="M2.5 9.5c2.4 3.4 5.6 5.1 9.5 5.1s7.1-1.7 9.5-5.1" />
+          <path d="M4.4 13.1 2.8 15.6" />
+          <path d="M8.2 14.9 7.4 17.7" />
+          <path d="M15.8 14.9l.8 2.8" />
+          <path d="m19.6 13.1 1.6 2.5" />
+        </>
+      ) : (
+        <>
+          <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z" />
+          <circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 export default function LoginPage() {
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError]       = useState("");
   const [loading, setLoading]   = useState(false);
   const router = useRouter();
@@ -61,14 +93,25 @@ export default function LoginPage() {
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
               Contraseña
             </label>
-            <input
-              type="password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full border border-black/10 bg-gray-50/60 rounded-xl px-3.5 py-2 text-sm text-gray-900 focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors"
-              placeholder="••••••••"
-            />
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full border border-black/10 bg-gray-50/60 rounded-xl pl-3.5 pr-11 py-2 text-sm text-gray-900 focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors"
+                placeholder="••••••••"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                title={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                className="absolute inset-y-0 right-0 flex items-center px-3 text-brand-600 hover:text-brand-700 rounded-r-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 transition-colors"
+              >
+                <EyeIcon off={showPassword} />
+              </button>
+            </div>
           </div>
 
           {error && (
