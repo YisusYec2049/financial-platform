@@ -561,9 +561,6 @@ export default function CruceView() {
       <div className={`${PANEL} animate-slide-down px-6 py-4 flex items-center justify-between flex-wrap gap-3`}>
         <div className="flex items-center gap-3 flex-wrap">
           <h1 className="text-lg font-semibold text-gray-900">Cruce de Cartera</h1>
-          <span className="text-xs text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full font-medium">
-            En construcción — INCP y CORREO(2) implementados, resto pendiente
-          </span>
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">

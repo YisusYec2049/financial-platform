@@ -16,7 +16,7 @@ const NAV_ITEMS = [
   },
   {
     href: "/cruce",
-    label: "Cruce de Cartera",
+    label: "Identificación",
     tileClass: "bg-emerald-500",
     viewBox: "0 0 20 20",
     icon: (
@@ -25,11 +25,20 @@ const NAV_ITEMS = [
   },
   {
     href: "/cartera-preventiva",
-    label: "Cartera Preventiva",
+    label: "Cartera",
     tileClass: "bg-sky-500",
     viewBox: "0 0 24 24",
     icon: (
       <path fillRule="evenodd" clipRule="evenodd" d="M12.516 2.17a.75.75 0 00-1.032 0 11.209 11.209 0 01-7.877 3.08.75.75 0 00-.722.515A12.74 12.74 0 002.25 9.75c0 5.942 4.064 10.933 9.563 12.348a.75.75 0 00.374 0c5.499-1.415 9.563-6.406 9.563-12.348 0-1.39-.223-2.73-.635-3.985a.75.75 0 00-.722-.516l-.143.001c-2.996 0-5.717-1.17-7.734-3.08zm3.094 8.016a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z" />
+    ),
+  },
+  {
+    href: "/historico-carteras",
+    label: "Histórico Carteras",
+    tileClass: "bg-violet-500",
+    viewBox: "0 0 24 24",
+    icon: (
+      <path fillRule="evenodd" clipRule="evenodd" d="M12 2.25a9.75 9.75 0 00-8.25 4.56V4.5a.75.75 0 00-1.5 0v4.25c0 .414.336.75.75.75H7.25a.75.75 0 000-1.5H4.86A8.25 8.25 0 1112 20.25a.75.75 0 000 1.5c5.385 0 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm.75 4.5a.75.75 0 00-1.5 0V12c0 .284.16.544.415.67l3.5 1.75a.75.75 0 10.67-1.34l-3.085-1.543V6.75z" />
     ),
   },
   {

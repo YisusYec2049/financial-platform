@@ -32,6 +32,7 @@ const CATEGORIA_LABEL: Record<string, string> = {
   matricula: "Matrícula",
   cesantias: "Cesantías",
   pago_llave: "Pago por llave",
+  numeros_uc: "Números de UC",
   cheque: "Cheque",
   otros: "Otros",
 };
@@ -41,6 +42,7 @@ const CATEGORIA_BADGE: Record<string, string> = {
   matricula: "bg-brand-50 text-brand-700",
   cesantias: "bg-emerald-50 text-emerald-700",
   pago_llave: "bg-amber-50 text-amber-700",
+  numeros_uc: "bg-violet-50 text-violet-700",
   cheque: "bg-rose-50 text-rose-700",
   otros: "bg-slate-100 text-slate-700",
 };
@@ -506,6 +508,7 @@ export default function TransactionsView() {
             <option value="matricula" className="text-gray-900">Matrícula</option>
             <option value="cesantias" className="text-gray-900">Cesantías</option>
             <option value="pago_llave" className="text-gray-900">Pago por llave</option>
+            <option value="numeros_uc" className="text-gray-900">Números de UC</option>
             <option value="cheque" className="text-gray-900">Cheque</option>
             <option value="otros" className="text-gray-900">Otros</option>
           </select>
