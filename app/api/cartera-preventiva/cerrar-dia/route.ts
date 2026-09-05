@@ -99,7 +99,7 @@ export async function POST(req: NextRequest) {
       query = query.eq("fecha_cruce", hoy);
     }
 
-    if (search) query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%,codigo_transaccion_1.ilike.%${search}%,inscrip.ilike.%${search}%`);
+    if (search) query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%,codigo_transaccion_1.ilike.%${search}%,inscrip.ilike.%${search}%,llave.ilike.%${search}%`);
     // Las 3 ramas tienen que ser las mismas de la pantalla (ver GET
     // /api/cartera-preventiva): este endpoint decide QUÉ cuotas cierra a partir de
     // los filtros de la vista, así que si divergen escribe sobre un conjunto

@@ -57,7 +57,7 @@ export async function GET(req: NextRequest) {
       .range(from, from + batchSize - 1);
 
     if (search) {
-      query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%,codigo_transaccion_1.ilike.%${search}%,inscrip.ilike.%${search}%`);
+      query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%,codigo_transaccion_1.ilike.%${search}%,inscrip.ilike.%${search}%,llave.ilike.%${search}%`);
     }
     // Ver GET /api/cartera-preventiva: "Resuelta" excluye las ya cerradas, o si no
     // es un superconjunto de "Cerradas" y la descarga no coincide con la pantalla.

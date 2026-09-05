@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
     let query: typeof base = base;
 
     if (search) {
-      query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%,codigo_transaccion_1.ilike.%${search}%,inscrip.ilike.%${search}%`);
+      query = query.or(`cliente.ilike.%${search}%,cruce_access.ilike.%${search}%,codigo_transaccion_1.ilike.%${search}%,inscrip.ilike.%${search}%,llave.ilike.%${search}%`);
     }
 
     // "Resuelta" = tiene pago identificado y NADIE la ha cerrado todavía, o sea las
