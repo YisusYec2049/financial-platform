@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { Fragment, useEffect, useState, useCallback, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import { useSessionState } from "@/lib/useSessionState";
 import { useReproceso } from "@/lib/useReproceso";
@@ -298,6 +298,13 @@ export default function CarteraPreventivaView() {
   const [descartarData, setDescartarData]       = useState<Record<string, AsociacionRow[]>>({});
   const [descartarLoading, setDescartarLoading] = useState<Record<string, boolean>>({});
   const [descartarError, setDescartarError]     = useState<Record<string, string>>({});
+  // "Descartar y marcar pagada por Cartera" (2026-08-31): suelta los pagos de la
+  // cuota y la cierra por Cartera de un clic. Comparte los datos del panel de
+  // descartar (misma consulta), pero su propio abierto/cerrado.
+  const [descartarCerrarOpen, setDescartarCerrarOpen] = useState<Record<string, boolean>>({});
+  // Un solo menú de acciones abierto a la vez: son ~100 filas y dos menús
+  // superpuestos no se entienden.
+  const [menuOpen, setMenuOpen]                 = useState<string | null>(null);
   const [stagingCount, setStagingCount]         = useState(0);
   const [activando, setActivando]               = useState(false);
   const [activarMessage, setActivarMessage]     = useState("");
@@ -321,6 +328,7 @@ export default function CarteraPreventivaView() {
   const abortControllerRef              = useRef<AbortController | null>(null);
   const tableContainerRef               = useRef<HTMLDivElement>(null);
   const dropdownRef                     = useRef<HTMLDivElement>(null);
+  const menuRef                         = useRef<HTMLDivElement>(null);
 
   const PAGE_SIZE = 100;
 
@@ -478,6 +486,19 @@ export default function CarteraPreventivaView() {
     const handleClickOutside = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // El menú de acciones de la fila se cierra al hacer clic fuera. Los paneles
+  // que abre viven en la fila expandida, no acá dentro, así que cerrarlo no
+  // cierra nada de lo que la persona esté llenando.
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(null);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -910,32 +931,12 @@ export default function CarteraPreventivaView() {
     return Number.isFinite(n) ? n : 0;
   };
 
-  // Cierre normal de una cuota CON pago identificado: copia valor_pago → pago
-  // (misma escritura que "Cerrar Cartera" en bloque, pero para esta llave).
-  // Escritura directa e inmediata, así que NO dispara reproceso — el pipeline
-  // la respeta por idempotencia.
-  const handleCerrarCuota = async (row: CarteraPreventivaRow) => {
-    setRowSaving(row.llave);
-    setRowError((prev) => ({ ...prev, [row.llave]: "" }));
-    try {
-      const res  = await fetch("/api/cartera-preventiva/cerrar-cuota", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ llave: row.llave }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Error al cerrar la cuota");
-      setRowMessage((prev) => ({
-        ...prev,
-        [row.llave]: json.mensaje || (json.yaCerrada ? "La cuota ya estaba cerrada." : "Cuota cerrada."),
-      }));
-      fetchData(page);
-    } catch (err) {
-      setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
-    } finally {
-      setRowSaving(null);
-    }
-  };
+  // El botón "Cerrar Cuota" (POST /api/cartera-preventiva/cerrar-cuota) se
+  // eliminó el 2026-09-02 a pedido del área: en toda la historia se apretó 5
+  // veces y 2 de esas hubo que deshacerlas por SQL, porque ese cierre no tiene
+  // "Reabrir". No se pierde ninguna capacidad — el botón de bloque "Cerrar
+  // Cartera" (cerrar-dia) hace exactamente la misma escritura — y la ruta se
+  // deja en pie a propósito.
 
   const handleCerrarCartera = async (row: CarteraPreventivaRow) => {
     const fecha = cierreFecha[row.llave] || new Date().toISOString().slice(0, 10);
@@ -1144,22 +1145,110 @@ export default function CarteraPreventivaView() {
   };
 
   // Regla #3: trae los pagos asociados a esta cuota para poder descartar uno.
+  const cargarAsociaciones = async (row: CarteraPreventivaRow) => {
+    if (descartarData[row.llave]) return;
+    setDescartarLoading((prev) => ({ ...prev, [row.llave]: true }));
+    setDescartarError((prev) => ({ ...prev, [row.llave]: "" }));
+    try {
+      const res  = await fetch(`/api/cartera-preventiva/asociaciones?llave=${encodeURIComponent(row.llave)}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al cargar pagos asociados");
+      setDescartarData((prev) => ({ ...prev, [row.llave]: json.data || [] }));
+    } catch (err) {
+      setDescartarError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setDescartarLoading((prev) => ({ ...prev, [row.llave]: false }));
+    }
+  };
+
   const toggleDescartarPanel = async (row: CarteraPreventivaRow) => {
     const willOpen = !descartarOpen[row.llave];
     setDescartarOpen((prev) => ({ ...prev, [row.llave]: willOpen }));
-    if (willOpen && !descartarData[row.llave]) {
-      setDescartarLoading((prev) => ({ ...prev, [row.llave]: true }));
-      setDescartarError((prev) => ({ ...prev, [row.llave]: "" }));
-      try {
-        const res  = await fetch(`/api/cartera-preventiva/asociaciones?llave=${encodeURIComponent(row.llave)}`);
+    if (willOpen) await cargarAsociaciones(row);
+  };
+
+  // "Descartar y marcar pagada por Cartera": el panel pide la fecha apenas se
+  // abre (requisito del usuario) y lista lo que va a soltar. Los dos paneles
+  // comparten `descartarData` — es la misma consulta.
+  const toggleDescartarCerrarPanel = async (row: CarteraPreventivaRow) => {
+    const willOpen = !descartarCerrarOpen[row.llave];
+    setDescartarCerrarOpen((prev) => ({ ...prev, [row.llave]: willOpen }));
+    if (willOpen && !cierreFecha[row.llave]) {
+      setCierreFecha((prev) => ({ ...prev, [row.llave]: new Date().toISOString().slice(0, 10) }));
+    }
+    if (willOpen) await cargarAsociaciones(row);
+  };
+
+  // Suelta TODOS los pagos de la cuota y después la cierra por Cartera, con UN
+  // solo reproceso al final.
+  //
+  // ⚠️ Primero descartar y después cerrar, no al revés: si falla el descarte no
+  // se cierra nada, y si falla el cierre la cuota queda pendiente con su plata
+  // como saldo a favor — un estado que el área ya sabe manejar. Si un descarte
+  // falla a mitad de camino se corta ahí: lo que ya se soltó queda soltado.
+  //
+  // ⚠️ NO se reutiliza handleDescartarPago: ese dispara `fireTrigger` por su
+  // cuenta, así que con N pagos encolaría N reprocesos.
+  const handleDescartarYCerrar = async (row: CarteraPreventivaRow) => {
+    const asociaciones = descartarData[row.llave] || [];
+    if (asociaciones.length === 0) return;
+    const fecha = cierreFecha[row.llave] || new Date().toISOString().slice(0, 10);
+    setRowSaving(`dycerrar:${row.llave}`);
+    setRowError((prev) => ({ ...prev, [row.llave]: "" }));
+    setDescartarError((prev) => ({ ...prev, [row.llave]: "" }));
+    let sueltos = 0;
+    try {
+      for (const asociacion of asociaciones) {
+        const res  = await fetch("/api/cartera-preventiva/descartar-pago", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            asociacion_id: asociacion.id,
+            llave: row.llave,
+            matching_key: asociacion.matching_key,
+            documento: row.cruce_access,
+            correo: row.correo,
+            cliente: row.cliente,
+            inscrip: row.inscrip,
+          }),
+        });
         const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "Error al cargar pagos asociados");
-        setDescartarData((prev) => ({ ...prev, [row.llave]: json.data || [] }));
-      } catch (err) {
-        setDescartarError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
-      } finally {
-        setDescartarLoading((prev) => ({ ...prev, [row.llave]: false }));
+        if (!res.ok) throw new Error(json.error || "Error al descartar el pago");
+        sueltos++;
+        setDescartarData((prev) => ({ ...prev, [row.llave]: (prev[row.llave] || []).filter((a) => a.id !== asociacion.id) }));
       }
+
+      const valorCuota = parseMonto(cuotaEdits[row.llave] ?? row.valor_cuota);
+      const res  = await fetch("/api/cartera-preventiva/overrides", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          llave: row.llave,
+          cerrado_manual: true,
+          fecha_pago_manual: fecha,
+          medio_pago_manual: "Cartera",
+          valor_pago_manual: valorCuota,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al cerrar la cartera");
+      setRowMessage((prev) => ({
+        ...prev,
+        [row.llave]: `${sueltos} pago(s) descartado(s) y cierre guardado. Se refleja al terminar el recálculo.`,
+      }));
+      setDescartarCerrarOpen((prev) => ({ ...prev, [row.llave]: false }));
+      fetchSaldosFavor();
+      fireTrigger(row.llave);
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
+      // Si alcanzó a soltar algo, esa plata ya se movió: hay que refrescar el
+      // ledger y recalcular igual, aunque el cierre no se haya escrito.
+      if (sueltos > 0) {
+        fetchSaldosFavor();
+        fireTrigger(row.llave);
+      }
+    } finally {
+      setRowSaving(null);
     }
   };
 
@@ -1917,8 +2006,77 @@ export default function CarteraPreventivaView() {
                   // ya aplicado — un cierre manual de cartera no tiene pago
                   // asociado que descartar.
                   const puedeDescartar = !pendiente && row.medio_pago !== "Cartera" && row.notificacion !== "CARTERA";
+                  // Las acciones de la fila, en el orden fijo del spec (§1.1): no
+                  // depende de la cuota, simplemente no se listan las que no aplican.
+                  // 🔴 Las SEÑALES no entran acá y siguen visibles en la celda
+                  // ("Cuota cerrada", "Ya cobrada", el saldo a favor, el badge del
+                  // reproceso y los mensajes): no son acciones, son lo que le dice al
+                  // área que en esa fila hay trabajo, y detrás de un clic nadie las ve
+                  // pasando la tabla.
+                  const acciones: { key: string; label: string; onClick: () => void; className: string; title?: string }[] = [];
+                  if (pendiente && row.valor_pago == null) acciones.push({
+                    key: "cierre",
+                    label: cierreOpen[row.llave] ? "Ocultar cierre" : "Marcar pagada por Cartera",
+                    onClick: () => toggleCierrePanel(row),
+                    className: "text-gray-700",
+                    title: "La cuota no tiene pago identificado — declararla pagada por cartera",
+                  });
+                  if (puedeDescartar) acciones.push({
+                    key: "descartar",
+                    label: descartarOpen[row.llave] ? "Ocultar descartar" : "Descartar pago",
+                    onClick: () => toggleDescartarPanel(row),
+                    className: "text-red-700",
+                    title: "Suelta un pago de esta cuota; vuelve como saldo a favor del documento",
+                  });
+                  // Va DEBAJO de "Descartar pago" y no lo reemplaza: a veces solo hay
+                  // que descartar, y un botón que además cierre sería un problema
+                  // (decisión explícita del usuario). En gris/pizarra, no en rojo,
+                  // porque lo que hace es CERRAR — el descarte es el medio.
+                  if (puedeDescartar && !cerrada && !yaCobrada) acciones.push({
+                    key: "descartar-cerrar",
+                    label: descartarCerrarOpen[row.llave] ? "Ocultar descartar y cerrar" : "Descartar y marcar pagada por Cartera",
+                    onClick: () => toggleDescartarCerrarPanel(row),
+                    className: "text-slate-700",
+                    title: "Suelta los pagos de la cuota y la cierra por Cartera, de un paso",
+                  });
+                  if (puedeAsociar && (pendiente || avisoSinAplicar)) acciones.push({
+                    key: "asociar",
+                    label: asociarOpen[row.cruce_access] ? "Ocultar asociar" : "⚠️ Asociar",
+                    onClick: () => toggleAsociarPanel(row),
+                    className: "text-amber-700",
+                  });
+                  if (tieneSaldo) acciones.push({
+                    key: "saldo",
+                    label: asociarSaldoOpen[row.llave]
+                      ? "Ocultar saldo"
+                      : puedeAsociarSaldo ? "Asociar pago" : "Enviar a otro documento",
+                    onClick: () => setAsociarSaldoOpen((prev) => ({ ...prev, [row.llave]: !prev[row.llave] })),
+                    className: "text-teal-700",
+                  });
+                  if (necesitaUltimaCuota(row)) acciones.push({
+                    key: "ultima",
+                    label: ultimaCuotaLlaves.has(row.llave) ? "✓ Última cuota" : "Es la última cuota",
+                    onClick: () => handleToggleUltimaCuota(row),
+                    className: "text-indigo-700",
+                    title: "Marca que esta es la última cuota de la inscripción (modo B): un sobrante pasa a excedente final, un faltante se condona hasta $50k",
+                  });
+                  if (!pendiente && row.notificacion === "CARTERA") acciones.push({
+                    key: "reabrir",
+                    label: "Reabrir",
+                    onClick: () => handleReabrirCartera(row),
+                    className: "text-slate-700",
+                    title: "Deshace el cierre manual — la cuota vuelve a pendiente en el próximo cruce",
+                  });
+                  const savingDyC = rowSaving === `dycerrar:${row.llave}`;
+                  const asociacionesDeLaCuota = descartarData[row.llave] || [];
+                  // Los formularios viven DEBAJO de la fila, al ancho de la tabla
+                  // (§1.3): son listas con montos, casillas y campo de documento
+                  // destino — dentro de un menú de ~250 px quedan peor que hoy.
+                  const panelAbierto = cierreOpen[row.llave] || asociarOpen[row.cruce_access]
+                    || descartarCerrarOpen[row.llave] || asociarSaldoOpen[row.llave] || descartarOpen[row.llave];
                   return (
-                  <tr key={row.id} className={`hover:bg-gray-50/70 transition-colors duration-100 align-top ${rowTint(row)}`}>
+                  <Fragment key={row.id}>
+                  <tr className={`hover:bg-gray-50/70 transition-colors duration-100 align-top ${rowTint(row)}`}>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.llave)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.sistema_financiero)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">
@@ -2018,33 +2176,40 @@ export default function CarteraPreventivaView() {
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cruce_access)}</td>
                     <td className="px-4 py-2.5">{paymentBadge(row)}</td>
                     <td className="px-4 py-2.5">
-                      <div className="flex flex-col gap-1 min-w-[160px]">
-                        {necesitaUltimaCuota(row) && (
+                      <div className="flex flex-col gap-1 min-w-[150px]">
+                        {/* Un solo botón: el 94% de las filas ofrece UNA acción, así
+                            que lo que desordenaba la columna no era la pila de
+                            botones sino los paneles — que ahora abren debajo. */}
+                        <div className="relative" ref={menuOpen === row.llave ? menuRef : undefined}>
                           <button
-                            onClick={() => handleToggleUltimaCuota(row)}
-                            disabled={saving}
-                            title="Marca que esta es la última cuota de la inscripción (modo B): un sobrante pasa a excedente final, un faltante se condona hasta $50k"
-                            className={`text-xs px-2 py-1 rounded-lg border active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 ${
-                              ultimaCuotaLlaves.has(row.llave)
-                                ? "bg-indigo-600 border-indigo-600 text-white hover:bg-indigo-700"
-                                : "border-indigo-300 text-indigo-700 hover:bg-indigo-50"
-                            }`}
+                            onClick={() => setMenuOpen(menuOpen === row.llave ? null : row.llave)}
+                            disabled={saving || acciones.length === 0}
+                            title={acciones.length === 0 ? "Sin acciones para esta cuota" : undefined}
+                            className="w-full text-xs px-2 py-1 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-40 disabled:hover:bg-transparent flex items-center justify-between gap-1"
                           >
-                            {ultimaCuotaLlaves.has(row.llave) ? "✓ Última cuota" : "Es la última cuota"}
+                            <span>Acciones</span>
+                            <span className="text-[10px] text-gray-400">{menuOpen === row.llave ? "▴" : "▾"}</span>
                           </button>
-                        )}
-                        {/* Cuota CON pago identificado → cierre normal directo:
-                            no hay nada que capturar, el pago ya se conoce. */}
-                        {row.valor_pago != null && !cerrada && !yaCobrada && (
-                          <button
-                            onClick={() => handleCerrarCuota(row)}
-                            disabled={saving}
-                            title="Pasa el valor pagado al campo Pago — la cuota queda cerrada"
-                            className="text-xs px-2 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
-                          >
-                            {saving ? "Cerrando..." : "Cerrar Cuota"}
-                          </button>
-                        )}
+                          {/* El menú se despliega EN FLUJO, no flotando: el contenedor
+                              de la tabla es `overflow-auto max-h-[65vh]`, así que un
+                              menú absoluto quedaría cortado en las filas de abajo,
+                              que son la mayoría de las que se trabajan. */}
+                          {menuOpen === row.llave && acciones.length > 0 && (
+                            <div className="animate-fade-in mt-1 bg-white border border-black/[0.08] rounded-lg shadow-sm py-1 flex flex-col">
+                              {acciones.map((accion) => (
+                                <button
+                                  key={accion.key}
+                                  onClick={() => { setMenuOpen(null); accion.onClick(); }}
+                                  disabled={saving}
+                                  title={accion.title}
+                                  className={`text-left text-xs px-2 py-1.5 hover:bg-gray-50 disabled:opacity-50 ${accion.className}`}
+                                >
+                                  {accion.label}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                         {cerrada && (
                           <span className="text-[11px] text-gray-400 whitespace-nowrap">Cuota cerrada</span>
                         )}
@@ -2056,28 +2221,27 @@ export default function CarteraPreventivaView() {
                             Ya cobrada
                           </span>
                         )}
-                        {/* Cuota SIN pago identificado → cierre manual "Cartera":
-                            la persona declara que se pagó por cartera. */}
-                        {pendiente && row.valor_pago == null && (
-                          <button
-                            onClick={() => toggleCierrePanel(row)}
-                            disabled={saving}
-                            title="La cuota no tiene pago identificado — declararla pagada por cartera"
-                            className="text-xs px-2 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
-                          >
-                            {cierreOpen[row.llave] ? "Ocultar cierre" : "Marcar pagada por Cartera"}
-                          </button>
+                        {/* Señales (§1.2): la plata a la vista es lo que hace que
+                            alguien mire la fila. El botón para moverla sí está en el
+                            menú. */}
+                        {tieneSaldo && (
+                          <span className="text-[11px] text-teal-800">
+                            Saldo a favor de {fmtMonto(grupo!.total)}
+                          </span>
                         )}
-                        {!pendiente && row.notificacion === "CARTERA" && (
-                          <button
-                            onClick={() => handleReabrirCartera(row)}
-                            disabled={saving}
-                            title="Deshace el cierre manual — la cuota vuelve a pendiente en el próximo cruce"
-                            className="text-xs px-2 py-1 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
-                          >
-                            Reabrir
-                          </button>
+                        {marcaFila(row.llave)}
+                        {rowMessage[row.llave] && <span className="text-[11px] text-green-700">{rowMessage[row.llave]}</span>}
+                        {rowError[row.llave] && <span className="text-[11px] text-red-600">{rowError[row.llave]}</span>}
+                        {acciones.length === 0 && !cerrada && !yaCobrada && !tieneSaldo && !rowMessage[row.llave] && (
+                          <span className="text-xs text-gray-400">—</span>
                         )}
+                      </div>
+                    </td>
+                  </tr>
+                  {panelAbierto && (
+                  <tr className="bg-gray-50/40">
+                    <td colSpan={21} className="px-4 py-3">
+                      <div className="flex flex-wrap items-start gap-3">
                         {cierreOpen[row.llave] && (
                           <div className="animate-fade-in bg-gray-50 border border-gray-200 rounded-lg p-2 space-y-1.5">
                             <label className="block text-[11px] text-gray-500">Fecha de pago</label>
@@ -2097,14 +2261,53 @@ export default function CarteraPreventivaView() {
                             </button>
                           </div>
                         )}
-                        {puedeAsociar && (pendiente || avisoSinAplicar) && (
-                          <button
-                            onClick={() => toggleAsociarPanel(row)}
-                            disabled={saving}
-                            className="text-xs px-2 py-1 rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
-                          >
-                            {asociarOpen[row.cruce_access] ? "Ocultar asociar" : "⚠️ Asociar"}
-                          </button>
+                        {/* Descartar y marcar pagada por Cartera: pide la fecha
+                            APENAS se abre (requisito del usuario) y lista lo que va a
+                            soltar antes de tocar nada. */}
+                        {descartarCerrarOpen[row.llave] && (
+                          <div className="animate-fade-in bg-slate-50 border border-slate-200 rounded-lg p-2 space-y-1.5 w-72">
+                            <p className="text-[11px] font-medium text-slate-700">Descartar y marcar pagada por Cartera</p>
+                            <label className="block text-[11px] text-gray-500">Fecha de pago</label>
+                            <input
+                              type="date"
+                              value={cierreFecha[row.llave] || ""}
+                              onChange={(e) => setCierreFecha((prev) => ({ ...prev, [row.llave]: e.target.value }))}
+                              className="w-full border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50"
+                            />
+                            {descartarLoading[row.llave] ? (
+                              <p className="text-xs text-gray-500">Cargando...</p>
+                            ) : descartarError[row.llave] ? (
+                              <p className="text-xs text-red-600">{descartarError[row.llave]}</p>
+                            ) : asociacionesDeLaCuota.length === 0 ? (
+                              // Guarda: sin asociación viva, Confirmar cerraría la cuota
+                              // sin soltar nada y el pago quedaría comido.
+                              <p className="text-[11px] text-gray-500">No hay pagos asociados a descartar.</p>
+                            ) : (
+                              <>
+                                <p className="text-[11px] text-gray-500">Se van a soltar:</p>
+                                {asociacionesDeLaCuota.map((asociacion) => (
+                                  <p key={asociacion.id} className="text-[11px] text-gray-600 bg-white border border-gray-200 rounded px-1.5 py-1">
+                                    {/* El monto es el de la ASOCIACIÓN, nunca el de la
+                                        columna "Valor Pago": esa muestra lo que entró
+                                        por el pago, no lo aplicado a esta cuota. */}
+                                    {fmt(asociacion.transaction_code_1)} · {fmt(asociacion.payment_date)} · {fmtMonto(asociacion.monto)}
+                                  </p>
+                                ))}
+                                <p className="text-[11px] text-gray-400">Medio: Cartera · Valor: {fmtMonto(parseMonto(cuotaEdits[row.llave] ?? row.valor_cuota))}</p>
+                                <p className="text-[11px] text-amber-700">
+                                  &quot;Reabrir&quot; devuelve la cuota a pendiente pero no vuelve a pegar el pago:
+                                  queda como saldo a favor y hay que asociarlo a mano.
+                                </p>
+                                <button
+                                  onClick={() => handleDescartarYCerrar(row)}
+                                  disabled={savingDyC}
+                                  className="w-full text-xs px-2 py-1.5 rounded-lg bg-slate-700 text-white hover:bg-slate-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                                >
+                                  {savingDyC ? "Procesando..." : "Confirmar"}
+                                </button>
+                              </>
+                            )}
+                          </div>
                         )}
                         {asociarOpen[row.cruce_access] && (
                           <div className="animate-fade-in bg-amber-50/60 border border-amber-200/80 rounded-lg p-2 space-y-1.5 w-64">
@@ -2266,23 +2469,13 @@ export default function CarteraPreventivaView() {
                             )}
                           </div>
                         )}
-                        {tieneSaldo && (
-                          <div className="bg-teal-50/60 border border-teal-200/80 rounded-lg p-1.5 space-y-1">
+                        {tieneSaldo && asociarSaldoOpen[row.llave] && (
+                          <div className="bg-teal-50/60 border border-teal-200/80 rounded-lg p-1.5 space-y-1 w-80">
                             <p className="text-[11px] text-teal-800">
                               Esta inscripción tiene un saldo a favor de {fmtMonto(grupo!.total)}
                             </p>
-                            <button
-                              onClick={() => setAsociarSaldoOpen((prev) => ({ ...prev, [row.llave]: !prev[row.llave] }))}
-                              disabled={saving}
-                              className="text-xs px-2 py-1 rounded-lg border border-teal-300 text-teal-700 hover:bg-teal-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
-                            >
-                              {asociarSaldoOpen[row.llave]
-                                ? "Ocultar"
-                                : puedeAsociarSaldo ? "Asociar pago" : "Enviar a otro documento"}
-                            </button>
-                            {asociarSaldoOpen[row.llave] && (
-                              <div className="animate-fade-in space-y-1 pt-1">
-                                {grupo!.rows.map((saldo) => {
+                            <div className="animate-fade-in space-y-1 pt-1">
+                              {grupo!.rows.map((saldo) => {
                                   const otroKey = `saldo:${saldo.id}:${row.llave}`;
                                   const savingAction = rowSaving === otroKey;
                                   const montoTodo = Math.min(saldo.disponible, cuotaRestante || saldo.disponible);
@@ -2439,19 +2632,9 @@ export default function CarteraPreventivaView() {
                                       </div>
                                     </div>
                                   );
-                                })}
-                              </div>
-                            )}
+                              })}
+                            </div>
                           </div>
-                        )}
-                        {puedeDescartar && (
-                          <button
-                            onClick={() => toggleDescartarPanel(row)}
-                            disabled={saving}
-                            className="text-xs px-2 py-1 rounded-lg border border-red-300 text-red-700 hover:bg-red-50 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
-                          >
-                            {descartarOpen[row.llave] ? "Ocultar descartar" : "Descartar pago"}
-                          </button>
                         )}
                         {descartarOpen[row.llave] && (
                           <div className="animate-fade-in bg-red-50/60 border border-red-200/80 rounded-lg p-2 space-y-1.5 w-64">
@@ -2482,15 +2665,11 @@ export default function CarteraPreventivaView() {
                             )}
                           </div>
                         )}
-                        {marcaFila(row.llave)}
-                        {rowMessage[row.llave] && <span className="text-[11px] text-green-700">{rowMessage[row.llave]}</span>}
-                        {rowError[row.llave] && <span className="text-[11px] text-red-600">{rowError[row.llave]}</span>}
-                        {!pendiente && !necesitaUltimaCuota(row) && !cierreOpen[row.llave] && !puedeDescartar && !tieneSaldo && !rowMessage[row.llave] && (
-                          <span className="text-xs text-gray-400">—</span>
-                        )}
                       </div>
                     </td>
                   </tr>
+                  )}
+                  </Fragment>
                   );
                 })
               )}
