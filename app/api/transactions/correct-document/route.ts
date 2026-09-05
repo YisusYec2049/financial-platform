@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
 
   const { data: tx, error: txError } = await supabase
     .from("consolidated_transactions")
-    .select("identification")
+    .select("identification, payment_method")
     .eq("matching_key", matchingKey)
     .maybeSingle();
 
@@ -50,9 +50,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, unchanged: true });
   }
 
+  // En Bancolombia y Prebancolombia el documento y el correo son EL MISMO dato:
+  // esos extractos no traen correo, así que el parser escribe REFERENCIA 1 del PDF
+  // en los dos campos. Si solo corregimos identification, el número viejo se queda
+  // en email y de ahí viaja al cruce y a la cuota (desde el 11/08/2026 el pipeline
+  // guarda el correo tal como está en el consolidado), y en pantalla ese campo no
+  // se puede editar.
+  //
+  // ⚠️ SOLO estas dos fuentes: en WOMPI, Stripe, PlaceToPay y PayU el correo es el
+  // de quien paga (0 de 3.661 coinciden con el documento) y es con lo que se
+  // resuelve CORREO(2) allá — pisarlo lo borraría. Y la comparación es por valor
+  // exacto: `WOMPI BANCOLOMBIA_TRANSFER` NO va, y un startsWith("BANCOLOMBIA")
+  // dejaría fuera PREBANCOLOMBIA.
+  const correoEsElDocumento =
+    tx.payment_method === "BANCOLOMBIA" || tx.payment_method === "PREBANCOLOMBIA";
+
   const { error: updateTxError } = await supabase
     .from("consolidated_transactions")
-    .update({ identification: documentoCorregido })
+    .update(
+      correoEsElDocumento
+        ? { identification: documentoCorregido, email: documentoCorregido }
+        : { identification: documentoCorregido }
+    )
     .eq("matching_key", matchingKey);
   if (updateTxError) return NextResponse.json({ error: updateTxError.message }, { status: 500 });
 
@@ -77,7 +96,12 @@ export async function POST(req: NextRequest) {
   logAudit({
     user_email: user.email ?? "unknown",
     action: "correct_document",
-    filters: { matching_key: matchingKey, documento_original: documentoOriginal, documento_corregido: documentoCorregido },
+    filters: {
+      matching_key: matchingKey,
+      documento_original: documentoOriginal,
+      documento_corregido: documentoCorregido,
+      email_actualizado: correoEsElDocumento,
+    },
     result_count: 1,
   });
 
