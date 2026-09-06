@@ -324,6 +324,9 @@ export default function CarteraPreventivaView() {
   const [cerrandoDia, setCerrandoDia]           = useState(false);
   const [cerrarDiaMessage, setCerrarDiaMessage] = useState("");
   const [cerrarDiaError, setCerrarDiaError]     = useState("");
+  // Ancho visible del contenedor con scroll. Lo usa la fila expandida para no
+  // dibujarse fuera de la pantalla — ver el bloque del panel más abajo.
+  const [panelWidth, setPanelWidth]             = useState(0);
   const searchTimeout                   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef              = useRef<AbortController | null>(null);
   const tableContainerRef               = useRef<HTMLDivElement>(null);
@@ -490,6 +493,21 @@ export default function CarteraPreventivaView() {
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // El ancho de lo que se ve de la tabla, no el de la tabla. Son 21 columnas
+  // `whitespace-nowrap`: la tabla mide varios miles de píxeles y el contenedor
+  // muestra una ventana. Se mide con ResizeObserver porque cambia sin recargar
+  // —la barra lateral se ensancha al pasar el mouse— y no basta con medirlo al
+  // montar.
+  useEffect(() => {
+    const el = tableContainerRef.current;
+    if (!el) return;
+    const medir = () => setPanelWidth(el.clientWidth);
+    medir();
+    const observer = new ResizeObserver(medir);
+    observer.observe(el);
+    return () => observer.disconnect();
   }, []);
 
   // El menú de acciones de la fila se cierra al hacer clic fuera. Los paneles
@@ -2240,7 +2258,18 @@ export default function CarteraPreventivaView() {
                   </tr>
                   {panelAbierto && (
                   <tr className="bg-gray-50/40">
-                    <td colSpan={21} className="px-4 py-3">
+                    {/* La celda ocupa las 21 columnas, o sea el ancho ENTERO de la
+                        tabla (miles de píxeles). El botón que abre este panel vive
+                        en la última columna, así que para apretarlo hay que estar
+                        scrolleado a la derecha — y el contenido, que se dibuja desde
+                        el borde izquierdo de la celda, quedaba fuera de la pantalla:
+                        se apretaba la acción y "no pasaba nada".
+                        `sticky left-0` + el ancho de lo VISIBLE lo mantienen debajo
+                        del botón, se haya scrolleado lo que se haya scrolleado. El
+                        padding va en el div, no en la celda, o se quedaría anclado
+                        al lado izquierdo de la tabla. */}
+                    <td colSpan={21} className="p-0">
+                      <div className="sticky left-0 px-4 py-3" style={{ width: panelWidth || undefined }}>
                       <div className="flex flex-wrap items-start gap-3">
                         {cierreOpen[row.llave] && (
                           <div className="animate-fade-in bg-gray-50 border border-gray-200 rounded-lg p-2 space-y-1.5">
@@ -2665,6 +2694,7 @@ export default function CarteraPreventivaView() {
                             )}
                           </div>
                         )}
+                      </div>
                       </div>
                     </td>
                   </tr>
