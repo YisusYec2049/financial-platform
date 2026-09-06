@@ -4,7 +4,22 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSidebar } from "@/components/SidebarContext";
 
+// ⚠️ El orden de este arreglo ES el orden del menú, y sigue el orden del
+// trabajo: primero se cargan los archivos, después se mira lo que entró.
+// Cambiar el orden NO cambia ninguna ruta (ver la nota de "Cargar archivos").
 const NAV_ITEMS = [
+  {
+    // ⚠️ La ruta no se renombra una vez desplegada: el área guarda enlaces.
+    // Igual que con "Identificación" y "Cartera", acá cambian las etiquetas y
+    // el orden, nunca los `href`.
+    href: "/cargar-archivos",
+    label: "Cargar archivos",
+    tileClass: "bg-teal-500",
+    viewBox: "0 0 24 24",
+    icon: (
+      <path fillRule="evenodd" clipRule="evenodd" d="M12 2.25a.75.75 0 01.53.22l4.5 4.5a.75.75 0 11-1.06 1.06l-3.22-3.22V15a.75.75 0 01-1.5 0V4.81L8.03 8.03a.75.75 0 01-1.06-1.06l4.5-4.5a.75.75 0 01.53-.22zM3.75 15a.75.75 0 01.75.75v3c0 .414.336.75.75.75h13.5a.75.75 0 00.75-.75v-3a.75.75 0 011.5 0v3A2.25 2.25 0 0118.75 21H5.25A2.25 2.25 0 013 18.75v-3a.75.75 0 01.75-.75z" />
+    ),
+  },
   {
     href: "/",
     label: "Consolidado",
@@ -33,21 +48,21 @@ const NAV_ITEMS = [
     ),
   },
   {
-    href: "/historico-carteras",
-    label: "Histórico Carteras",
-    tileClass: "bg-violet-500",
-    viewBox: "0 0 24 24",
-    icon: (
-      <path fillRule="evenodd" clipRule="evenodd" d="M12 2.25a9.75 9.75 0 00-8.25 4.56V4.5a.75.75 0 00-1.5 0v4.25c0 .414.336.75.75.75H7.25a.75.75 0 000-1.5H4.86A8.25 8.25 0 1112 20.25a.75.75 0 000 1.5c5.385 0 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm.75 4.5a.75.75 0 00-1.5 0V12c0 .284.16.544.415.67l3.5 1.75a.75.75 0 10.67-1.34l-3.085-1.543V6.75z" />
-    ),
-  },
-  {
     href: "/pagos-apartados",
     label: "Pagos Apartados",
     tileClass: "bg-rose-500",
     viewBox: "0 0 24 24",
     icon: (
       <path fillRule="evenodd" clipRule="evenodd" d="M3 3.75A1.75 1.75 0 014.75 2h6.5A1.75 1.75 0 0113 3.75v.5h6.25A1.75 1.75 0 0121 6v14.25A1.75 1.75 0 0119.25 22H4.75A1.75 1.75 0 013 20.25V3.75zm10 2.25v-2.25a.25.25 0 00-.25-.25h-6.5a.25.25 0 00-.25.25v16.5c0 .138.112.25.25.25h14.5a.25.25 0 00.25-.25V6a.25.25 0 00-.25-.25H13zM6.75 8.5a.75.75 0 01.75-.75h3a.75.75 0 010 1.5h-3a.75.75 0 01-.75-.75zm0 3.25a.75.75 0 01.75-.75h7a.75.75 0 010 1.5h-7a.75.75 0 01-.75-.75zm0 3.25a.75.75 0 01.75-.75h7a.75.75 0 010 1.5h-7a.75.75 0 01-.75-.75z" />
+    ),
+  },
+  {
+    href: "/historico-carteras",
+    label: "Histórico Carteras",
+    tileClass: "bg-violet-500",
+    viewBox: "0 0 24 24",
+    icon: (
+      <path fillRule="evenodd" clipRule="evenodd" d="M12 2.25a9.75 9.75 0 00-8.25 4.56V4.5a.75.75 0 00-1.5 0v4.25c0 .414.336.75.75.75H7.25a.75.75 0 000-1.5H4.86A8.25 8.25 0 1112 20.25a.75.75 0 000 1.5c5.385 0 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm.75 4.5a.75.75 0 00-1.5 0V12c0 .284.16.544.415.67l3.5 1.75a.75.75 0 10.67-1.34l-3.085-1.543V6.75z" />
     ),
   },
 ];
