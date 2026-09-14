@@ -1982,9 +1982,7 @@ export default function CarteraPreventivaView() {
                     ? pagoGuardado
                     : Number.isFinite(pagoNum) && pagoNum !== pagoActual;
                   const puedeAsociar = multiInscripcionDocs.has(row.cruce_access);
-                  // Regla #4/#7: mensaje + botón de asociar saldo a favor,
-                  // solo en las cuotas que necesitan dinero (pendiente o pago
-                  // parcial).
+                  // Regla #4/#7: mensaje + botón de asociar saldo a favor.
                   // Unión de las dos señales, sin repetir un saldo que caiga por ambas.
                   const porDoc    = saldosPorDocumento.get((row.cruce_access || "").trim()) || [];
                   const porCorreo = saldosPorCorreo.get((row.correo || "").trim().toLowerCase()) || [];
@@ -1995,21 +1993,24 @@ export default function CarteraPreventivaView() {
                     ? { total: saldosDeLaFila.reduce((a, s) => a + Number(s.disponible), 0),
                         rows:  saldosDeLaFila }
                     : undefined;
-                  const necesitaDinero = pendiente || parcial;
-                  // El botón NO se esconde por haber originado el saldo: si la cuota
-                  // necesita dinero, tiene que poder recibirlo, venga de donde venga.
-                  // (Antes había un `!esOrigenSaldo` aquí, para no ofrecerlo en la
-                  // cuota que ya muestra su badge "Saldo a favor" — pero ese badge
-                  // exige fecha_pago + diferencia > 0, o sea que `necesitaDinero` ya
-                  // es false ahí. Lo único que bloqueaba de más eran las cuotas que
-                  // originaron un saldo y quedaron debiendo: desde el 3/8 el pipeline
-                  // ya no pinta la plata descartada sobre su cuota de origen, así que
-                  // esas quedaban sin badge Y sin botón — con descartes en dos cuotas
-                  // del mismo documento, ninguna podía recibir la plata.)
-                  // ...y no en una línea de deuda cuya cuota original siga abierta:
-                  // ahí la plata va en la original, si no se pagaría dos veces.
-                  const puedeAsociarSaldo = !!grupo && grupo.total > 0 && necesitaDinero
-                                            && !row.original_abierta;
+                  // Una cuota YA CUBIERTA también puede recibir plata, y por eso acá no
+                  // se pregunta si la cuota necesita dinero (hasta el 14/09 había un
+                  // `necesitaDinero = pendiente || parcial` en esta condición). Si la
+                  // persona pagó de más, la fila TIENE que decirlo: con la plata
+                  // asociada, el pipeline escribe "PAGA N CUOTAS" / "N CUOTAS + ABONO",
+                  // que son las etiquetas con las que el área lee la cartera. Sin
+                  // asociar, esa misma fila dice "Pagada completa · Diferencia $0" de
+                  // alguien que pagó el doble, y el único rastro es el saldo al costado
+                  // (caso doc 79670680: dos pagos de $400.000 sobre una cuota de
+                  // $400.000, y la pantalla no dejaba poner el segundo ahí).
+                  // El botón tampoco se esconde por haber originado el saldo (antes
+                  // había un `!esOrigenSaldo`): desde el 3/8 el pipeline ya no pinta la
+                  // plata descartada sobre su cuota de origen, así que esas quedaban sin
+                  // badge Y sin botón.
+                  // 🔴 Lo ÚNICO que nunca recibe plata es una línea de deuda cuya cuota
+                  // original siga abierta: ahí la plata va en la original, si no se
+                  // pagaría la misma deuda dos veces (regla del 30 de julio).
+                  const puedeAsociarSaldo = !!grupo && grupo.total > 0 && !row.original_abierta;
                   // Enviar ese saldo a otra persona NO exige que esta cuota necesite
                   // dinero: el caso normal es justo el contrario — la cuota quedó
                   // pagada y lo que sobró es de otra cédula (un diplomado de 2 cupos
@@ -2548,10 +2549,14 @@ export default function CarteraPreventivaView() {
                                           )}
                                         </div>
                                       )}
-                                      {/* Asociar a ESTA cuota solo si la cuota necesita dinero.
-                                          Enviar a otra persona, en cambio, va siempre: el caso
-                                          normal es una cuota ya pagada cuyo sobrante es de otra
-                                          cédula. */}
+                                      {/* Asociar a ESTA cuota va también cuando la cuota ya está
+                                          cubierta — es lo que hace que la notificación diga
+                                          "PAGA N CUOTAS" en vez de dejar la fila en "Pagada
+                                          completa · Diferencia $0" con el doble pagado. Lo único
+                                          que no recibe plata es una línea de deuda con su cuota
+                                          original abierta. Enviar a otra persona va siempre: el
+                                          caso normal es una cuota ya pagada cuyo sobrante es de
+                                          otra cédula. */}
                                       {puedeAsociarSaldo && (
                                         <div className="flex items-center gap-1 text-[11px]">
                                           <button
