@@ -104,23 +104,70 @@ export async function POST(req: NextRequest) {
   const llave = `${inscrip}${serial}`;
   const supabase = createAdminClient();
 
-  // Validación 1: la llave tiene índice único — un upsert PISARÍA la cuota que ya
-  // existe, así que se avisa y no se guarda.
-  const { data: existente, error: dupErr } = await supabase
+  // Se piden TODAS las cuotas de la inscripción de una sola vez: con ellas se
+  // contestan las dos preguntas de abajo (¿ya vence una ese día? ¿está tomada la
+  // llave?) sin un segundo viaje y sin meter la llave dentro de un patrón `like`,
+  // donde los caracteres del lenguaje de filtros de PostgREST entrarían crudos.
+  const { data: deLaInscripcion, error: dupErr } = await supabase
     .from("cartera_preventiva")
-    .select("llave,cliente,fecha_vencimiento,valor_cuota")
-    .eq("llave", llave)
-    .maybeSingle();
+    .select("llave,cliente,fecha_vencimiento")
+    .eq("inscrip", inscrip)
+    // Orden por llave para que el aviso nombre siempre la misma fila: la llave de una
+    // cuota madre es prefijo de la de su línea de deuda, así que ascendente pone la
+    // madre primero — que es la que le sirve a quien lee el mensaje. Sin orden,
+    // PostgREST no garantiza cuál de las dos sale, y el aviso cambiaría solo.
+    .order("llave", { ascending: true })
+    .limit(1000);
 
   if (dupErr) return NextResponse.json({ error: dupErr.message }, { status: 500 });
-  if (existente) {
+  const filasInscrip = deLaInscripcion || [];
+
+  // Validación 1: se pregunta por la FECHA, no por la llave. La llave se congela al
+  // nacer la cuota (es con lo que se le amarran el pago aplicado, los overrides y el
+  // saldo a favor), así que corregir la fecha de vencimiento mueve la fila y NO la
+  // llave: la fecha original le queda ocupada a esa inscripción para siempre, aunque
+  // en pantalla ninguna cuota venza ese día. Preguntando por la llave, esta ruta
+  // frenaba cuotas legítimas diciendo que ya existía una que vence ese día — y no
+  // era cierto. Medido el 14/09: 32 cuotas vivas tienen la llave apuntando a una
+  // fecha que ya no es la suya.
+  //
+  // ⚠️ Nada de `.maybeSingle()`: una cuota partida y su línea de FALTA DE PAGO
+  // comparten inscripción y fecha (la línea hereda la fecha de su madre desde el
+  // 11/08), así que la consulta devuelve 2 filas y `maybeSingle()` revienta con
+  // PGRST116 — el área vería un error de sistema en vez del aviso. Comprobado con
+  // `620PN46316` y `620PN46316 (2026-09-10)`, las dos venciendo el 2026-10-21.
+  const mismaFecha = filasInscrip.filter((f) => f.fecha_vencimiento === fechaVencimiento);
+  if (mismaFecha.length > 0) {
+    const otra = mismaFecha[0];
+    const quien = otra.cliente ? `, ${otra.cliente}` : "";
     return NextResponse.json({
-      error: `Ya existe una cuota para ${inscrip} con vencimiento ${fechaVencimiento} (llave ${llave}). No se creó nada.`,
+      // La fecha se nombra desde la FILA ENCONTRADA, no desde lo que se tecleó: el
+      // mensaje viejo repetía la entrada y por eso se leía como mentira.
+      error: `Ya existe una cuota de ${inscrip} que vence el ${otra.fecha_vencimiento} (llave ${otra.llave}${quien}). No se creó nada.`,
     }, { status: 409 });
   }
 
+  // La fecha está libre pero la llave puede estar tomada por una cuota a la que le
+  // corrigieron el vencimiento. Ahí la cuota se crea igual, con la llave marcada.
+  //
+  // 🔴 El sufijo va con GUION y nunca como " (algo)". El pipeline
+  // (`cruzar_cartera_preventiva.py`, `_sincronizar_lineas_falta_de_pago`) y esta
+  // misma app (`app/api/cartera-preventiva/route.ts`, `baseDeLlave`) reconocen una
+  // línea de deuda partiendo la llave por " (": una cuota nueva llamada
+  // "6500PN46332 (2026-11-06)" nacería adoptada como línea de deuda de la vieja —
+  // sin botón "Asociar" mientras la madre siga abierta, con el valor reescrito por
+  // el pipeline, y candidata a que la borre cuando la madre cierre. Un "-2" no
+  // contiene " (" y ninguno de los dos lo mira.
+  const tomadas = new Set(filasInscrip.map((f) => f.llave as string));
+  let llaveFinal = llave;
+  let sufijo = 2;
+  while (tomadas.has(llaveFinal)) {
+    llaveFinal = `${llave}-${sufijo}`;
+    sufijo++;
+  }
+
   const fila = {
-    llave,
+    llave: llaveFinal,
     inscrip,
     cruce_access: cruceAccess,
     fecha_vencimiento: fechaVencimiento,
@@ -149,5 +196,5 @@ export async function POST(req: NextRequest) {
     result_count: 1,
   });
 
-  return NextResponse.json({ success: true, llave });
+  return NextResponse.json({ success: true, llave: llaveFinal });
 }
