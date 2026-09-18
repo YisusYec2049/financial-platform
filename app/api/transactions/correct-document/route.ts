@@ -3,9 +3,21 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 
-// Documento editable (§2.3 consolidado / §3.3 excepciones): corrige el campo
-// identification de una transacción puntual (ej. NIT sin dígito de
-// verificación) y deja constancia en documento_correcciones.
+// Documento y correo editables (§2.3 consolidado / §3.3 excepciones): corrigen
+// identification y/o email de una transacción puntual (ej. NIT sin dígito de
+// verificación) y dejan constancia en documento_correcciones.
+//
+// ⚠️ Los dos campos son INDEPENDIENTES y opcionales: si viene solo uno, se
+// escribe solo ese. En Bancolombia y Prebancolombia entran con el mismo valor
+// —esos extractos no traen correo, el parser escribe REFERENCIA 1 del PDF en los
+// dos campos— pero dejan de ser el mismo dato en cuanto alguien corrige: el
+// documento dice QUIÉN ES la persona, el correo dice QUÉ ESCRIBIÓ en el banco.
+// Hasta el 18/09/2026 corregir el documento de esas dos fuentes pisaba también
+// el correo, y eso le borraba al pipeline el segundo candidato con el que busca
+// el CORREO(2) (la hoja de ingresos conoce la referencia que reportó el banco,
+// no el documento real): la corrección que el área hacía para arreglar un pago
+// era la que le apagaba el cruce por correo. Medido: 14 pagos / $10.023.922 con
+// la referencia perdida, 13 de ellos sin CORREO(2).
 //
 // ⚠️ La corrección vale SOLO para este pago (matching_key_original). Hasta el
 // 5 de agosto de 2026 valía "por número" — quedaba la orden de cambiar ese
@@ -19,6 +31,10 @@ import { logAudit } from "@/lib/audit";
 // El insert deja UNA fila por corrección a propósito: ese historial es lo que
 // alimenta la sugerencia. No convertirlo en upsert — se perdería.
 //
+// 🔴 documento_correcciones se escribe SOLO si cambió el documento: su llave es
+// un documento y alimenta la sugerencia por número. Una corrección de correo no
+// pertenece ahí, y no hay tabla equivalente para correos (ni se crea acá).
+//
 // No recalculamos matching_key (esta app no conoce el algoritmo de cada banco)
 // — matching_key_nuevo se guarda igual al original porque la llave no cambia,
 // solo el documento.
@@ -27,18 +43,22 @@ export async function POST(req: NextRequest) {
   if (response) return response;
 
   const body = await req.json().catch(() => null);
-  const matchingKey      = body?.matching_key as string | undefined;
+  const matchingKey        = body?.matching_key as string | undefined;
   const documentoCorregido = (body?.documento_corregido as string | undefined)?.trim();
+  const correoCorregido    = (body?.correo_corregido as string | undefined)?.trim();
 
-  if (!matchingKey || !documentoCorregido) {
-    return NextResponse.json({ error: "matching_key y documento_corregido son requeridos" }, { status: 400 });
+  if (!matchingKey || (!documentoCorregido && !correoCorregido)) {
+    return NextResponse.json(
+      { error: "matching_key y al menos uno de documento_corregido / correo_corregido son requeridos" },
+      { status: 400 },
+    );
   }
 
   const supabase = createAdminClient();
 
   const { data: tx, error: txError } = await supabase
     .from("consolidated_transactions")
-    .select("identification, payment_method")
+    .select("identification, email")
     .eq("matching_key", matchingKey)
     .maybeSingle();
 
@@ -46,32 +66,22 @@ export async function POST(req: NextRequest) {
   if (!tx) return NextResponse.json({ error: "Transacción no encontrada" }, { status: 404 });
 
   const documentoOriginal = tx.identification;
-  if (documentoOriginal === documentoCorregido) {
+  const correoOriginal    = tx.email;
+
+  const cambiaDocumento = !!documentoCorregido && documentoCorregido !== documentoOriginal;
+  const cambiaCorreo    = !!correoCorregido    && correoCorregido    !== correoOriginal;
+
+  if (!cambiaDocumento && !cambiaCorreo) {
     return NextResponse.json({ success: true, unchanged: true });
   }
 
-  // En Bancolombia y Prebancolombia el documento y el correo son EL MISMO dato:
-  // esos extractos no traen correo, así que el parser escribe REFERENCIA 1 del PDF
-  // en los dos campos. Si solo corregimos identification, el número viejo se queda
-  // en email y de ahí viaja al cruce y a la cuota (desde el 11/08/2026 el pipeline
-  // guarda el correo tal como está en el consolidado), y en pantalla ese campo no
-  // se puede editar.
-  //
-  // ⚠️ SOLO estas dos fuentes: en WOMPI, Stripe, PlaceToPay y PayU el correo es el
-  // de quien paga (0 de 3.661 coinciden con el documento) y es con lo que se
-  // resuelve CORREO(2) allá — pisarlo lo borraría. Y la comparación es por valor
-  // exacto: `WOMPI BANCOLOMBIA_TRANSFER` NO va, y un startsWith("BANCOLOMBIA")
-  // dejaría fuera PREBANCOLOMBIA.
-  const correoEsElDocumento =
-    tx.payment_method === "BANCOLOMBIA" || tx.payment_method === "PREBANCOLOMBIA";
+  const cambios: { identification?: string; email?: string } = {};
+  if (cambiaDocumento) cambios.identification = documentoCorregido;
+  if (cambiaCorreo)    cambios.email          = correoCorregido;
 
   const { error: updateTxError } = await supabase
     .from("consolidated_transactions")
-    .update(
-      correoEsElDocumento
-        ? { identification: documentoCorregido, email: documentoCorregido }
-        : { identification: documentoCorregido }
-    )
+    .update(cambios)
     .eq("matching_key", matchingKey);
   if (updateTxError) return NextResponse.json({ error: updateTxError.message }, { status: 500 });
 
@@ -82,28 +92,38 @@ export async function POST(req: NextRequest) {
   // Consecuencia esperada: la tab Excepciones sigue mostrando el documento viejo
   // hasta que el pipeline reprocese la fila.
 
-  const { error: correccionError } = await supabase
-    .from("documento_correcciones")
-    .insert({
-      documento_original: documentoOriginal,
-      documento_corregido: documentoCorregido,
-      matching_key_original: matchingKey,
-      matching_key_nuevo: matchingKey,
-      fecha_correccion: new Date().toISOString().slice(0, 10),
-    });
-  if (correccionError) return NextResponse.json({ error: correccionError.message }, { status: 500 });
+  if (cambiaDocumento) {
+    const { error: correccionError } = await supabase
+      .from("documento_correcciones")
+      .insert({
+        documento_original: documentoOriginal,
+        documento_corregido: documentoCorregido,
+        matching_key_original: matchingKey,
+        matching_key_nuevo: matchingKey,
+        fecha_correccion: new Date().toISOString().slice(0, 10),
+      });
+    if (correccionError) return NextResponse.json({ error: correccionError.message }, { status: 500 });
+  }
 
   logAudit({
     user_email: user.email ?? "unknown",
-    action: "correct_document",
+    // Se distinguen para poder leer la bitácora: una corrección de solo correo
+    // no deja fila en documento_correcciones, así que sin esto no habría rastro
+    // de qué clase de corrección fue.
+    action: cambiaDocumento ? "correct_document" : "correct_email",
     filters: {
       matching_key: matchingKey,
-      documento_original: documentoOriginal,
-      documento_corregido: documentoCorregido,
-      email_actualizado: correoEsElDocumento,
+      ...(cambiaDocumento
+        ? { documento_original: documentoOriginal, documento_corregido: documentoCorregido }
+        : {}),
+      ...(cambiaCorreo ? { correo_original: correoOriginal, correo_corregido: correoCorregido } : {}),
     },
     result_count: 1,
   });
 
-  return NextResponse.json({ success: true, documento_corregido: documentoCorregido });
+  return NextResponse.json({
+    success: true,
+    ...(cambiaDocumento ? { documento_corregido: documentoCorregido } : {}),
+    ...(cambiaCorreo ? { correo_corregido: correoCorregido } : {}),
+  });
 }

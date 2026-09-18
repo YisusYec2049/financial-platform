@@ -67,6 +67,7 @@ export default function TransactionsView() {
   const [dropdownOpen, setDropdownOpen]   = useState(false);
   const [newRecords, setNewRecords]       = useState(false);
   const [docEdits, setDocEdits]           = useState<Record<string, string>>({});
+  const [correoEdits, setCorreoEdits]     = useState<Record<string, string>>({});
   const [pagoUnicoChecked, setPagoUnicoChecked] = useState<Record<string, boolean>>({});
   const [rowSaving, setRowSaving]         = useState<string | null>(null);
   const [rowMessage, setRowMessage]       = useState<Record<string, string>>({});
@@ -391,6 +392,47 @@ export default function TransactionsView() {
     }
   };
 
+  // Hermano de handleSaveDocumento, y a propósito por separado: corregir uno NO
+  // obliga a cambiar el otro. En Bancolombia el correo entra con el número de la
+  // REFERENCIA 1 del PDF —el documento dice quién es la persona, el correo dice
+  // qué escribió en el banco— y el pipeline busca el CORREO(2) con las dos
+  // referencias, así que pisar el correo le apaga el segundo candidato.
+  //
+  // ⚠️ Vale para TODAS las fuentes, sin condición por payment_method: en WOMPI,
+  // Stripe y PlaceToPay el correo es un correo de verdad y también se escribe mal.
+  //
+  // No hay sugerencia tipo DocumentHistoryHint: no existe tabla de correcciones
+  // de correo (la ruta no escribe documento_correcciones cuando solo cambia esto).
+  const handleSaveCorreo = async (row: Transaction) => {
+    const nuevo = (correoEdits[row.matching_key] ?? row.email ?? "").trim();
+    if (!nuevo || nuevo === row.email) return;
+    setRowSaving(row.matching_key);
+    setRowError((prev) => ({ ...prev, [row.matching_key]: "" }));
+    setRowMessage((prev) => ({ ...prev, [row.matching_key]: "" }));
+    try {
+      const res  = await fetch("/api/transactions/correct-document", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matching_key: row.matching_key, correo_corregido: nuevo }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al corregir el correo");
+      setData((prev) => prev.map((r) => r.matching_key === row.matching_key ? { ...r, email: nuevo } : r));
+      setCorreoEdits((prev) => {
+        const next = { ...prev };
+        delete next[row.matching_key];
+        return next;
+      });
+      setRowMessage((prev) => ({ ...prev, [row.matching_key]: "Correo corregido para este pago. Se aplicará al terminar el recálculo." }));
+      // Acción sobre UN pago → reproceso puntual (spec "Reproceso de un solo pago").
+      fireTrigger(row.matching_key, { matchingKey: row.matching_key });
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [row.matching_key]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setRowSaving(null);
+    }
+  };
+
   const fmt = (v: string | null) => v || "—";
   const fmtMonto = (v: number | null) =>
     v != null ? new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(v) : "—";
@@ -607,6 +649,8 @@ export default function TransactionsView() {
                   const patternOffer = removePatternOffer[row.matching_key];
                   const docValue = docEdits[row.matching_key] ?? row.identification;
                   const docChanged = docValue.trim() !== "" && docValue.trim() !== row.identification;
+                  const correoValue = correoEdits[row.matching_key] ?? row.email ?? "";
+                  const correoChanged = correoValue.trim() !== "" && correoValue.trim() !== row.email;
                   return (
                   <tr key={row.id} className="hover:bg-gray-50/70 transition-colors duration-100 align-top">
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.registration_date)}</td>
@@ -651,7 +695,28 @@ export default function TransactionsView() {
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.payment_date)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_1)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.transaction_code_2)}</td>
-                    <td className="px-4 py-2.5 text-gray-500 text-xs">{fmt(row.email)}</td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="text"
+                          value={correoValue}
+                          onChange={(e) => setCorreoEdits((prev) => ({ ...prev, [row.matching_key]: e.target.value }))}
+                          disabled={saving}
+                          title="Correo de este pago (editable)"
+                          className="w-48 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                        />
+                        {correoChanged && (
+                          <button
+                            onClick={() => handleSaveCorreo(row)}
+                            disabled={saving}
+                            title="Guardar corrección de correo"
+                            className="text-xs px-1.5 py-1 rounded-lg bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                          >
+                            ✓
+                          </button>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.program)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.phone)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">
