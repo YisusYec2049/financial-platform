@@ -85,6 +85,59 @@ export function esFuenteValida(v: string): boolean {
 export const BUCKET = "archivos-pipeline";
 export const ENTRADA = "entrada";
 
+/**
+ * El apartado donde vive un archivo **recién soltado**, mientras el pipeline lo
+ * revisa y antes de que nadie apriete "Subir".
+ *
+ * 🔴 **El pipeline NUNCA lista esto** — `utils/deposito.py:listar()` mira solo
+ * `entrada/<fuente>/`—, así que un archivo acá **no existe para la corrida**:
+ * todavía no lo subieron, solo lo soltaron. Pasa a `entrada/` cuando la persona
+ * aprieta Subir, y eso es un **movimiento** del almacenamiento: el archivo viaja
+ * una sola vez desde el navegador.
+ *
+ * El pipeline lo vacía solo a los 2 días (`caducar(…, dias=2, zona=REVISION)`),
+ * para que los intentos abandonados no se acumulen — es la red, no el camino: la
+ * ✕ de la pantalla borra la copia en el acto.
+ */
+export const REVISION = "revision";
+
+/** Las dos zonas del depósito que esta app escribe. */
+export type Zona = typeof ENTRADA | typeof REVISION;
+
+export function esZonaValida(v: string): v is Zona {
+  return v === ENTRADA || v === REVISION;
+}
+
+/**
+ * La ruta de un archivo recién soltado, dentro del apartado de revisión.
+ *
+ * ⚠️ **Va PLANA, sin una subcarpeta por archivo**: la limpieza del pipeline
+ * lista `revision/<fuente>/` y salta lo que no sea un archivo, así que con una
+ * carpeta por intento **nunca se borraría nada**.
+ *
+ * ⚠️ **El `id` delante del nombre es obligatorio**: sin él, soltar dos veces el
+ * mismo archivo —o dos personas a la vez— se pisan entre sí en el apartado.
+ *
+ * ⚠️ **Y acá NO va el lote de PayU**: el lote se decide sobre la tanda que se
+ * sube junta, o sea recién al apretar Subir, y se arma en el destino del
+ * movimiento.
+ */
+export function rutaRevision(fuente: string, id: string, nombre: string): string {
+  return `${REVISION}/${fuente}/${id}__${nombre}`;
+}
+
+/**
+ * Identificador de un archivo soltado, para que dos no se pisen en el apartado.
+ *
+ * Mismo criterio que `nuevoLote()`: base36, sin `__` adentro. Acá el separador
+ * no lo parte nadie —el pipeline no lee estos nombres— pero el nombre final del
+ * movimiento sí se arma con `__`, y tener una sola regla evita pensarlo dos
+ * veces.
+ */
+export function nuevoIdSoltado(): string {
+  return `R${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
 /** Las dos fuentes que se suben en par. Ver §4 de la spec original. */
 export const PAYU_PAR: [string, string] = ["payu", "payu_moneda"];
 

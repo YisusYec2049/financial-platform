@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/server";
-import { BUCKET, esFuenteValida, rutaEntrada } from "@/lib/fuentes";
+import { BUCKET, ENTRADA, REVISION, esFuenteValida, rutaEntrada, rutaRevision } from "@/lib/fuentes";
 
 /**
  * Devuelve una URL firmada para que el NAVEGADOR suba el archivo directo al
@@ -23,6 +23,11 @@ export async function POST(req: NextRequest) {
   const nombre = typeof body?.nombre === "string" ? body.nombre.trim() : "";
   const fuente = typeof body?.fuente === "string" ? body.fuente.trim() : "";
   const lote = typeof body?.lote === "string" && body.lote.trim() ? body.lote.trim() : null;
+  // La zona por omisión es `entrada`: así el llamador que no la manda se
+  // comporta exactamente como antes de que existiera el apartado de revisión.
+  const zona = typeof body?.zona === "string" && body.zona.trim() ? body.zona.trim() : ENTRADA;
+  // El id solo se usa en `revision/`, para que dos archivos no se pisen ahí.
+  const id = typeof body?.id === "string" ? body.id.trim() : "";
 
   if (!nombre) {
     return NextResponse.json({ error: "Falta el nombre del archivo." }, { status: 400 });
@@ -42,7 +47,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "El nombre del archivo no puede contener '/'." }, { status: 400 });
   }
 
-  const ruta = rutaEntrada(fuente, nombre, lote);
+  if (zona !== ENTRADA && zona !== REVISION) {
+    return NextResponse.json({ error: `Zona desconocida: ${zona}` }, { status: 400 });
+  }
+  // 🔴 Sin `id` el apartado se pisa a sí mismo: dos personas soltando el mismo
+  // archivo a la vez escribirían sobre la misma ruta.
+  if (zona === REVISION && (!id || id.includes("/"))) {
+    return NextResponse.json({ error: "Falta el identificador del archivo soltado." }, { status: 400 });
+  }
+
+  /**
+   * ⚠️ **El lote de PayU no entra en `revision/`** (§2 de la spec): se decide
+   * sobre la tanda que se sube junta, o sea recién al apretar Subir, y el nombre
+   * final con su lote lo arma el movimiento a `entrada/`.
+   */
+  const ruta = zona === REVISION ? rutaRevision(fuente, id, nombre) : rutaEntrada(fuente, nombre, lote);
 
   try {
     const supabase = createAdminClient();
