@@ -4,7 +4,7 @@ import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import {
   parseFiltrosHistorico,
-  tablaDeCartera,
+  VISTA_HISTORICO,
   aplicarFiltrosHistorico,
   ordenarHistorico,
 } from "@/lib/historicoCarteras";
@@ -14,8 +14,12 @@ import {
  * nada: esas cuotas ya se archivaron con sus pagos, y "cerrar" o "descartar" sobre una
  * fila archivada sería escribir sobre historia.
  *
+ * Lee la vista que une TODAS las carteras (la viva y las archivadas). Ya no hay selector:
+ * el área busca por Día del Cruce y ese filtro tenía que alcanzar las 6 cargas a la vez.
+ *
  * ⚠️ La misma llave puede aparecer en varias carteras y está bien: la gracia es ver cómo
- * se veía esa cuota en cada momento. NO se deduplica por llave.
+ * se veía esa cuota en cada momento. NO se deduplica por llave — por eso la pantalla
+ * muestra de qué carga viene cada fila.
  */
 export async function GET(req: NextRequest) {
   const { user, response } = await requireAuth(req);
@@ -30,7 +34,7 @@ export async function GET(req: NextRequest) {
   const supabase = createAdminClient();
 
   const base = supabase
-    .from(tablaDeCartera(filtros.cartera))
+    .from(VISTA_HISTORICO)
     .select("*", { count: "exact" });
 
   const { data, error, count } = await ordenarHistorico(aplicarFiltrosHistorico(base, filtros))

@@ -4,7 +4,7 @@ import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import {
   parseFiltrosHistorico,
-  tablaDeCartera,
+  VISTA_HISTORICO,
   aplicarFiltrosHistorico,
   ordenarHistorico,
 } from "@/lib/historicoCarteras";
@@ -14,7 +14,7 @@ import {
  * crudos — `fecha_cruce` incluido, que es el campo con el que el área lleva su
  * seguimiento diario y el motivo del requerimiento.
  *
- * 🔴 Lee EXACTAMENTE lo mismo que la lista: filtros y selector salen del mismo helper
+ * 🔴 Lee EXACTAMENTE lo mismo que la lista: los filtros salen del mismo helper
  * (lib/historicoCarteras.ts). Si esta ruta y la de la pantalla divergen, el Excel trae
  * un conjunto distinto del que la persona está viendo y no hay forma de notarlo.
  */
@@ -26,7 +26,6 @@ export async function GET(req: NextRequest) {
   const filtros = parseFiltrosHistorico(searchParams);
 
   const supabase = createAdminClient();
-  const tabla    = tablaDeCartera(filtros.cartera);
   const MAX_ROWS = 50_000;
   const BATCH    = 1000;
   let allData: Record<string, unknown>[] = [];
@@ -37,7 +36,7 @@ export async function GET(req: NextRequest) {
 
     // La consulta se reconstruye en cada lote: un builder de supabase-js ya ejecutado
     // no sirve para pedir el rango siguiente.
-    const base = supabase.from(tabla).select("*");
+    const base = supabase.from(VISTA_HISTORICO).select("*");
     const { data, error } = await ordenarHistorico(aplicarFiltrosHistorico(base, filtros))
       .range(from, from + batchSize - 1);
 
@@ -51,9 +50,10 @@ export async function GET(req: NextRequest) {
 
   const truncated = allData.length >= MAX_ROWS;
 
-  // Descarte de repetidos por `id` (la PK de las dos tablas), no por `llave`: la misma
-  // llave vive a propósito en varias carteras, y dentro de una cartera una cuota cobrada
-  // por partes son dos renglones legítimos.
+  // Descarte de repetidos por `id`, no por `llave`: la misma llave vive a propósito en
+  // varias carteras, y dentro de una cartera una cuota cobrada por partes son dos
+  // renglones legítimos. `id` es la PK de las dos tablas base y sigue siendo único en la
+  // vista unida — comparten la misma secuencia, así que sus rangos son disjuntos.
   const seen = new Set<number>();
   const salida = allData.filter((row) => {
     const id = row.id as number;

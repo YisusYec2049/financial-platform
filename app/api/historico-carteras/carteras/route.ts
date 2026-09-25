@@ -4,8 +4,12 @@ import { requireAuth } from "@/lib/auth";
 import { CARTERA_VIVA } from "@/lib/historicoCarteras";
 
 /**
- * Las opciones del selector: la cartera viva primero y las archivadas de más nueva a
- * más vieja.
+ * Las carteras que existen: la viva primero y las archivadas de más nueva a más vieja.
+ *
+ * ⚠️ Ya NO alimenta un selector — la pantalla unió todas las carteras en una lista. Lo que
+ * alimenta es la columna "Cartera": el mapa `carga_id → etiqueta` con el que cada fila
+ * dice de qué carga viene. Sin eso, la misma cuota repetida en dos carteras se lee como
+ * un error de la pantalla.
  *
  * El conteo por cartera sale de la vista `cartera_historico_v` (una fila por carga_id,
  * con cuántas cuotas tiene y entre qué fechas cruzó). PostgREST no agrupa, y leer las

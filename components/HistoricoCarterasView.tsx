@@ -4,9 +4,12 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
 import { useSessionState } from "@/lib/useSessionState";
 
-// Las mismas columnas de Cartera Preventiva; el archivo agrega carga_id/fecha_archivo.
+// Las mismas columnas de Cartera Preventiva; la vista unida agrega carga_id,
+// fecha_archivo, fecha_referencia y cruce_externo.
 type HistoricoRow = {
   id: number;
+  carga_id: string;
+  cruce_externo: boolean;
   llave: string;
   inscrip: string;
   cliente: string;
@@ -42,7 +45,7 @@ type CarteraOpcion = {
 };
 
 const CARTERA_VIVA = "viva";
-const COLUMNAS = 21;
+const COLUMNAS = 22;
 
 // Las fechas de la base son instantes con zona (`…-0500` en carga_id, `…+00:00` en
 // fecha_archivo), así que se formatean en hora de Colombia: dejarlo al navegador haría
@@ -56,16 +59,13 @@ const fmtDia = (iso: string | null) => {
   }).format(d);
 };
 
+// La etiqueta con la que cada fila dice de qué carga viene. Va en una celda de la tabla,
+// así que no lleva el conteo de cuotas: ese número describe la cartera entera y repetido
+// en cada renglón es ruido.
 const etiquetaCartera = (c: CarteraOpcion) => {
-  const cuotas = `${c.cuotas.toLocaleString("es-CO")} cuotas`;
-  if (c.tipo === "viva") {
-    return c.desde
-      ? `Cartera actual — desde el ${fmtDia(c.desde)} · ${cuotas}`
-      : `Cartera actual · ${cuotas}`;
-  }
+  if (c.tipo === "viva") return "Cartera actual";
   // "Cartera del 24/08 al 26/08/2026": del día de carga al día en que se archivó.
-  const desde = fmtDia(c.desde).slice(0, 5);
-  return `Cartera del ${desde} al ${fmtDia(c.hasta)} · ${cuotas}`;
+  return `Cartera del ${fmtDia(c.desde).slice(0, 5)} al ${fmtDia(c.hasta)}`;
 };
 
 export default function HistoricoCarterasView() {
@@ -76,11 +76,11 @@ export default function HistoricoCarterasView() {
   const [loading, setLoading]       = useState(false);
   const [fetchError, setFetchError] = useState("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [cartera, setCartera]       = useSessionState("historico_carteras.cartera", CARTERA_VIVA);
   const [search, setSearch]         = useSessionState("historico_carteras.search", "");
   const [estado, setEstado]         = useSessionState("historico_carteras.estado", "todas");
   const [cruceFrom, setCruceFrom]   = useSessionState("historico_carteras.cruceFrom", "");
   const [cruceTo, setCruceTo]       = useSessionState("historico_carteras.cruceTo", "");
+  const [incluirExterno, setIncluirExterno] = useSessionState("historico_carteras.externo", false);
   const searchTimeout      = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const dropdownRef        = useRef<HTMLDivElement>(null);
@@ -102,13 +102,13 @@ export default function HistoricoCarterasView() {
 
   const buildParams = useCallback(() => {
     const params = new URLSearchParams();
-    params.set("cartera", cartera);
     if (search)    params.set("search", search);
     if (estado !== "todas") params.set("estado", estado);
     if (cruceFrom) params.set("cruce_from", cruceFrom);
     if (cruceTo)   params.set("cruce_to", cruceTo);
+    if (incluirExterno) params.set("externo", "1");
     return params;
-  }, [cartera, search, estado, cruceFrom, cruceTo]);
+  }, [search, estado, cruceFrom, cruceTo, incluirExterno]);
 
   const fetchData = useCallback(async (currentPage = 1) => {
     if (abortControllerRef.current) abortControllerRef.current.abort();
@@ -156,10 +156,20 @@ export default function HistoricoCarterasView() {
   const totalPages = Math.ceil(total / PAGE_SIZE);
   const handlePage = (p: number) => { setPage(p); fetchData(p); };
 
-  const carteraActual = carteras.find((c) => c.id === cartera);
-  const nombreArchivo = cartera === CARTERA_VIVA
-    ? "cartera_actual"
-    : `cartera_${fmtDia(carteraActual?.desde ?? null).replace(/\//g, "-")}`;
+  // ⚠️ Una cartera archivada DESPUÉS de que cargara la pantalla no está en el mapa. En ese
+  // caso se muestra la fecha cruda del carga_id, nunca vacío: la columna existe para
+  // explicar por qué la misma cuota sale dos veces, y en blanco no explicaría nada.
+  const nombreDeCartera = (cargaId: string) => {
+    const c = carteras.find((x) => x.id === cargaId);
+    if (c) return etiquetaCartera(c);
+    return cargaId === CARTERA_VIVA ? "Cartera actual" : cargaId.slice(0, 10);
+  };
+
+  // El archivo ya no lleva el nombre de una cartera (no hay selector); lleva el rango de
+  // fechas si el filtro está puesto, que es con lo que el área identifica su descarga.
+  const nombreArchivo = cruceFrom || cruceTo
+    ? `${cruceFrom || "inicio"}_a_${cruceTo || "hoy"}`
+    : "todas";
 
   const descargar = async (formato: "xlsx" | "csv") => {
     setDropdownOpen(false);
@@ -172,7 +182,41 @@ export default function HistoricoCarterasView() {
       if (json.truncated) {
         setFetchError("Se descargaron las primeras 50,000 filas. Usa los filtros para acotar la búsqueda.");
       }
-      const rows: Record<string, unknown>[] = json.data || [];
+      // El orden del Excel lo dicta ESTA lista, no la base. Son las 28 columnas de la cartera
+      // en el orden físico de la tabla, que es el que el área tiene en sus plantillas desde que
+      // existe la sección (hay fórmulas que apuntan a la letra de la columna, no al título).
+      //
+      // 🔴 No se hereda el orden de la vista: `cartera_historico_todo_v` las lista agrupadas
+      // por tema (quién es / la cuota / el pago), así que volcarla tal cual mueve 23 de las 28
+      // letras. Y las 4 columnas de apoyo (carga_id, fecha_archivo, fecha_referencia,
+      // cruce_externo) no están acá a propósito: la ruta las necesita para filtrar y ordenar,
+      // el entregable no.
+      //
+      // ⚠️ Va una sola vez, antes de bifurcar por formato: el CSV arma sus encabezados con
+      // `Object.keys(rows[0])`, así que fijar el orden solo en la rama del xlsx lo dejaría
+      // saliendo con el de la vista.
+      const ORDEN_ENTREGABLE = [
+        "id", "llave", "inscrip", "cliente", "correo", "fecha_vencimiento", "dias_en_cartera",
+        "valor_cuota", "valor_a_cobrar", "programa", "cruce_access", "fecha_pago", "medio_pago",
+        "valor_pago", "codigo_transaccion_1", "codigo_transaccion_2", "correo_elec", "diferencia",
+        "updated_at", "sistema_financiero", "moneda", "telefono_1", "telefono_2", "pago",
+        "fecha_cruce", "notificacion", "es_wompi_automatico", "pago_confirmado",
+      ];
+      const COLUMNAS_INTERNAS = ["carga_id", "fecha_archivo", "fecha_referencia", "cruce_externo"];
+
+      const rows: Record<string, unknown>[] = (json.data || []).map((row: Record<string, unknown>) => {
+        const salida: Record<string, unknown> = {};
+        // Primero las 28 conocidas, en su orden de siempre. El `?? ""` no es cosmético: una
+        // columna vacía en TODAS las filas tiene que seguir apareciendo como encabezado, o el
+        // archivo tendría 27 columnas ese día y todo lo de la derecha correría una letra.
+        for (const c of ORDEN_ENTREGABLE) salida[c] = row[c] ?? "";
+        // Y detrás, cualquier columna que la cartera gane mañana y esta lista no conozca: va al
+        // final, así aparece en el archivo sin correrle la letra a ninguna de las 28.
+        for (const c of Object.keys(row)) {
+          if (!(c in salida) && !COLUMNAS_INTERNAS.includes(c)) salida[c] = row[c] ?? "";
+        }
+        return salida;
+      });
       if (rows.length === 0) return;
       const fecha = new Date().toISOString().slice(0, 10);
 
@@ -223,7 +267,7 @@ export default function HistoricoCarterasView() {
     return "Pendiente";
   };
 
-  const hayFiltros = search || estado !== "todas" || cruceFrom || cruceTo;
+  const hayFiltros = search || estado !== "todas" || cruceFrom || cruceTo || incluirExterno;
 
   const PANEL = "bg-white rounded-2xl border border-black/[0.06] shadow-[0_1px_1px_rgba(0,0,0,0.03),0_8px_20px_-12px_rgba(0,0,0,0.15)]";
   const INPUT = "border border-black/10 bg-gray-50/60 rounded-xl px-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors";
@@ -234,24 +278,13 @@ export default function HistoricoCarterasView() {
         <div className="flex items-center gap-3 flex-wrap">
           <h1 className="text-lg font-semibold text-gray-900">Histórico Carteras</h1>
           <span className="text-xs text-gray-500 bg-gray-100 px-2.5 py-1 rounded-full font-medium">
-            Solo lectura — la traza de cada cartera, incluida la actual
+            Solo lectura — todas las carteras, solo las cuotas ya cruzadas
           </span>
         </div>
       </div>
 
       <div className={`${PANEL} animate-fade-in [animation-delay:60ms] px-6 py-4 space-y-3`}>
         <div className="flex gap-3 flex-wrap items-center">
-          <select
-            value={cartera}
-            onChange={(e) => { setCartera(e.target.value); setPage(1); }}
-            className={`${INPUT} min-w-[22rem] font-medium`}
-          >
-            {carteras.length === 0 && <option value={CARTERA_VIVA}>Cargando carteras...</option>}
-            {carteras.map((c) => (
-              <option key={c.id} value={c.id} className="text-gray-900">{etiquetaCartera(c)}</option>
-            ))}
-          </select>
-
           <div className="relative w-80">
             <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
@@ -270,8 +303,9 @@ export default function HistoricoCarterasView() {
             onChange={(e) => { setEstado(e.target.value); setPage(1); }}
             className={INPUT}
           >
+            {/* Sin "Pendiente": ninguna fila sin pago entra a esta sección, así que
+                elegirlo daría siempre cero y se leería como que la pantalla está rota. */}
             <option value="todas" className="text-gray-900">Todos los estados</option>
-            <option value="pendiente" className="text-gray-900">Pendiente</option>
             <option value="resuelta" className="text-gray-900">Resuelta</option>
             <option value="cerrada" className="text-gray-900">Cerrada</option>
           </select>
@@ -286,15 +320,19 @@ export default function HistoricoCarterasView() {
             <input type="date" value={cruceTo} onChange={(e) => { setCruceTo(e.target.value); setPage(1); }}
               className={`${INPUT} py-1`} />
           </div>
-          {carteraActual?.cruce_desde && (
-            <span className="text-xs text-gray-500">
-              Esta cartera cruzó del {carteraActual.cruce_desde} al {carteraActual.cruce_hasta}
-              {carteraActual.cuotas_con_cruce != null && ` · ${carteraActual.cuotas_con_cruce.toLocaleString("es-CO")} cuotas con cruce`}
-            </span>
-          )}
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={incluirExterno}
+              onChange={(e) => { setIncluirExterno(e.target.checked); setPage(1); }}
+              className="w-4 h-4 rounded border-black/20 text-brand-600 focus:ring-brand-500/50 cursor-pointer"
+            />
+            <span className="font-medium">Cruce por fuera del sistema</span>
+            <span className="text-xs text-gray-400">cuotas cuyo pago registró el proceso manual, sin día de cruce</span>
+          </label>
           {hayFiltros && (
             <button
-              onClick={() => { setSearch(""); setEstado("todas"); setCruceFrom(""); setCruceTo(""); setPage(1); }}
+              onClick={() => { setSearch(""); setEstado("todas"); setCruceFrom(""); setCruceTo(""); setIncluirExterno(false); setPage(1); }}
               className="text-red-500 hover:text-red-700 text-xs underline"
             >
               Limpiar filtros
@@ -347,6 +385,7 @@ export default function HistoricoCarterasView() {
             <thead className="sticky top-0 z-10">
               <tr className="bg-gray-50 text-gray-500 text-left border-b border-black/[0.06]">
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Llave</th>
+                <th className="px-4 py-3 font-medium whitespace-nowrap">Cartera</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Sistema Financiero</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Inscrip.</th>
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Cliente</th>
@@ -369,7 +408,7 @@ export default function HistoricoCarterasView() {
                 <th className="px-4 py-3 font-medium whitespace-nowrap">Estado</th>
               </tr>
             </thead>
-            <tbody key={`${cartera}-${page}`} className="divide-y divide-gray-100 animate-fade-in">
+            <tbody key={`${page}-${incluirExterno}-${estado}-${cruceFrom}-${cruceTo}`} className="divide-y divide-gray-100 animate-fade-in">
               {loading && data.length === 0 ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
@@ -383,13 +422,14 @@ export default function HistoricoCarterasView() {
               ) : data.length === 0 ? (
                 <tr>
                   <td colSpan={COLUMNAS} className="text-center py-12 text-gray-400">
-                    No hay cuotas en esta cartera con los filtros aplicados
+                    No hay cuotas con los filtros aplicados
                   </td>
                 </tr>
               ) : (
                 data.map((row) => (
                   <tr key={row.id} className="hover:bg-gray-50/70 transition-colors duration-100 align-top">
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.llave)}</td>
+                    <td className="px-4 py-2.5 text-gray-500 text-xs whitespace-nowrap">{nombreDeCartera(row.carga_id)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.sistema_financiero)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.inscrip)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.cliente)}</td>
@@ -400,7 +440,11 @@ export default function HistoricoCarterasView() {
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.valor_a_cobrar)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.programa)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.fecha_pago)}</td>
-                    <td className="px-4 py-2.5 text-gray-800 whitespace-nowrap bg-brand-50/40 font-medium">{fmt(row.fecha_cruce)}</td>
+                    <td className="px-4 py-2.5 text-gray-800 whitespace-nowrap bg-brand-50/40 font-medium">
+                      {row.cruce_externo
+                        ? <span className="text-[11px] font-normal text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">Por fuera del sistema</span>
+                        : fmt(row.fecha_cruce)}
+                    </td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.medio_pago)}</td>
                     <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.valor_pago)}</td>
                     <td className="px-4 py-2.5 text-gray-700">{fmt(row.codigo_transaccion_1)}</td>
