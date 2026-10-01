@@ -1008,6 +1008,40 @@ export default function CarteraPreventivaView() {
     }
   };
 
+  // Reabrir el cierre DE VERDAD, el que tiene pago asignado ("Cerrar Cartera"
+  // por bloque, o el viejo "Cerrar Cuota" por fila). Hasta hoy esas cuotas no
+  // tenían salida desde la pantalla y había que destrabarlas por SQL. La ruta
+  // aplica la inversa exacta de la fórmula del cierre y pone el Día del Cruce
+  // de HOY, para que la cuota caiga en el cierre de mañana en vez de quedar
+  // encerrada en su día viejo.
+  // Reabrir no corrige nada más: las modificaciones las hace una persona.
+  // ⚠️ Es otro camino que handleReabrirCartera a propósito: las cuotas cerradas
+  // por Cartera también traen `pago_confirmado`, pero su cierre vive en un
+  // override del que el pipeline es dueño (ver la guarda de la ruta).
+  const handleReabrirCuota = async (row: CarteraPreventivaRow) => {
+    setRowSaving(row.llave);
+    setRowError((prev) => ({ ...prev, [row.llave]: "" }));
+    try {
+      const res  = await fetch("/api/cartera-preventiva/reabrir-cuota", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ llave: row.llave }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al reabrir la cuota");
+      setRowMessage((prev) => ({ ...prev, [row.llave]: "Cuota reabierta con el Día del Cruce de hoy. Se refleja al terminar el recálculo." }));
+      // Seguro y conveniente: al quedar `pago_confirmado` en null el pipeline
+      // vuelve a comparar la fila, y desde el 2026-10-01 no reescribe una que
+      // no cambia nada (ni mira `fecha_cruce` al comparar), así que la fecha de
+      // la reapertura sobrevive.
+      fireTrigger(row.llave);
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
+    } finally {
+      setRowSaving(null);
+    }
+  };
+
   const handleSaveValorCuota = async (row: CarteraPreventivaRow) => {
     const nuevo = parseMonto(cuotaEdits[row.llave]);
     if (!Number.isFinite(nuevo) || nuevo === row.valor_cuota) return;
@@ -2079,12 +2113,22 @@ export default function CarteraPreventivaView() {
                     className: "text-indigo-700",
                     title: "Marca que esta es la última cuota de la inscripción (modo B): un sobrante pasa a excedente final, un faltante se condona hasta $50k",
                   });
-                  if (!pendiente && row.notificacion === "CARTERA") acciones.push({
+                  // Hay DOS tipos de cierre y no se deshacen igual. Para el área es la
+                  // misma acción —una sola etiqueta "Reabrir"—; la diferencia es interna:
+                  // el cierre por Cartera vive en un override (lo apaga el pipeline en su
+                  // próxima corrida, y queda sin Día del Cruce a propósito: esas cuotas no
+                  // tienen pago real que cruzar), mientras el cierre con pago asignado se
+                  // deshace escribiendo la fila con la inversa de su fórmula.
+                  const cierrePorCartera = !pendiente && row.notificacion === "CARTERA";
+                  const cierreConPago    = cerrada && row.notificacion !== "CARTERA";
+                  if (cierrePorCartera || cierreConPago) acciones.push({
                     key: "reabrir",
                     label: "Reabrir",
-                    onClick: () => handleReabrirCartera(row),
+                    onClick: () => cierrePorCartera ? handleReabrirCartera(row) : handleReabrirCuota(row),
                     className: "text-slate-700",
-                    title: "Deshace el cierre manual — la cuota vuelve a pendiente en el próximo cruce",
+                    title: cierrePorCartera
+                      ? "Deshace el cierre manual — la cuota vuelve a pendiente en el próximo cruce"
+                      : "Deshace el cierre y pone el Día del Cruce de hoy. No cambia el pago ni los datos de la cuota.",
                   });
                   const savingDyC = rowSaving === `dycerrar:${row.llave}`;
                   const asociacionesDeLaCuota = descartarData[row.llave] || [];
