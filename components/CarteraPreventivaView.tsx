@@ -6,6 +6,12 @@ import { useSessionState } from "@/lib/useSessionState";
 import { useReproceso } from "@/lib/useReproceso";
 import { parseMonto, formatMonto } from "@/lib/monto";
 import { esPagoSinAplicar } from "@/lib/pagoSinAplicar";
+// El mismo texto con el que las rutas rechazan (409) una cuota declarada pagada por
+// Cartera: acá se muestra ANTES de apretar. Una sola copia a propósito — dos textos
+// para la misma causa se desincronizan. `lib/cerradasManual` solo importa un TIPO del
+// cliente de servidor (`import type`, que se borra al compilar), así que nada de
+// `next/headers` entra al navegador.
+import { ERROR_CERRADA_POR_CARTERA } from "@/lib/cerradasManual";
 
 // Solo pregunta a Drive si llegó cartera nueva: corre sync_cartera.py y nada
 // más (~4 s) vía /api/cartera-preventiva/sync. NO recalcula el cruce — eso
@@ -274,11 +280,17 @@ export default function CarteraPreventivaView() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [multiInscripcionDocs, setMultiInscripcionDocs] = useState<Set<string>>(new Set());
   const [ultimaCuotaLlaves, setUltimaCuotaLlaves] = useState<Set<string>>(new Set());
+  // 🔴 El abierto/cerrado va por CUOTA (`row.llave`), los DATOS por documento
+  // (`row.cruce_access`). No es un descuido: los pagos y los saldos disponibles son
+  // del documento —una sola consulta sirve para todas sus cuotas—, pero el panel
+  // trabaja sobre la cuota de la fila. Hasta el 2026-10-02 las dos cosas iban por
+  // documento, así que apretar "Asociar" en una cuota expandía TODAS las cuotas de
+  // esa persona (hasta 6) y ninguna quedaba marcada como la elegida. Igualarlas al
+  // revés —todo por llave— haría una consulta por fila.
   const [asociarOpen, setAsociarOpen]           = useState<Record<string, boolean>>({});
   const [asociarData, setAsociarData]           = useState<Record<string, { inscripciones: InscripcionPendiente[]; pagos: PagoAsociable[] }>>({});
   const [asociarLoading, setAsociarLoading]     = useState<Record<string, boolean>>({});
   const [asociarError, setAsociarError]         = useState<Record<string, string>>({});
-  const [asociarMessage, setAsociarMessage]     = useState<Record<string, string>>({});
   const [montoOtroValor, setMontoOtroValor]     = useState<Record<string, string>>({});
   // Envío de saldo a otro documento. Todo va por pago (`${doc}:${matching_key}`),
   // que es la unidad sobre la que se decide: un pago puede cubrir a dos personas.
@@ -297,7 +309,9 @@ export default function CarteraPreventivaView() {
   const [rowMessage, setRowMessage]             = useState<Record<string, string>>({});
   const [rowError, setRowError]                 = useState<Record<string, string>>({});
   const [saldosFavor, setSaldosFavor]           = useState<SaldoFavorRow[]>([]);
-  const [asociarSaldoOpen, setAsociarSaldoOpen] = useState<Record<string, boolean>>({});
+  // Ya no hay un `asociarSaldoOpen`: los saldos a favor son una SECCIÓN del panel de
+  // asociar, no un panel aparte. Eran dos botones que abrían dos cosas distintas
+  // sobre la misma fila (trampa 4 del spec).
   const [saldoOtroValor, setSaldoOtroValor]     = useState<Record<string, string>>({});
   const [descartarOpen, setDescartarOpen]       = useState<Record<string, boolean>>({});
   const [descartarData, setDescartarData]       = useState<Record<string, AsociacionRow[]>>({});
@@ -742,24 +756,37 @@ export default function CarteraPreventivaView() {
     }
   }, []);
 
+  // Abre el panel en la fila donde se apretó, y carga (una sola vez) los pagos del
+  // documento. Las dos llaves son distintas a propósito — ver el comentario del
+  // estado.
   const toggleAsociarPanel = async (row: CarteraPreventivaRow) => {
     const doc = row.cruce_access;
-    const willOpen = !asociarOpen[doc];
-    setAsociarOpen((prev) => ({ ...prev, [doc]: willOpen }));
+    const willOpen = !asociarOpen[row.llave];
+    setAsociarOpen((prev) => ({ ...prev, [row.llave]: willOpen }));
     if (willOpen && !asociarData[doc]) {
       await fetchAsociarData(doc);
     }
   };
 
-  const handleAsociar = async (doc: string, pago: PagoAsociable, inscripcion: InscripcionPendiente, monto: number) => {
-    const actionKey = `${pago.matching_key}:${inscripcion.llave}`;
+  // Asocia un pago del documento a la cuota de ESTA fila. Ya no recibe una
+  // `InscripcionPendiente` elegida en una lista: la cuota destino es la fila, que es
+  // lo que la persona contestó al apretar el botón. Antes se elegía "una random de
+  // las que están ahí" y la plata se iba a otra cuota sin que nada avisara.
+  //
+  // El resultado va a `rowMessage`/`rowError` de la FILA, no a un mensaje por
+  // documento: con el panel por cuota pueden estar abiertas dos cuotas de la misma
+  // persona, y un mensaje por documento se vería en las dos.
+  const handleAsociar = async (row: CarteraPreventivaRow, pago: PagoAsociable, monto: number) => {
+    const doc = row.cruce_access;
+    const actionKey = `${pago.matching_key}:${row.llave}`;
     setRowSaving(actionKey);
+    setRowError((prev) => ({ ...prev, [row.llave]: "" }));
     setAsociarError((prev) => ({ ...prev, [doc]: "" }));
     try {
       const res  = await fetch("/api/cartera-preventiva/asociar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ matching_key: pago.matching_key, llave: inscripcion.llave, monto }),
+        body: JSON.stringify({ matching_key: pago.matching_key, llave: row.llave, monto }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al asociar");
@@ -771,15 +798,16 @@ export default function CarteraPreventivaView() {
           .filter((p) => p.restante > 0.01);
         return { ...prev, [doc]: { ...current, pagos } };
       });
-      setAsociarMessage((prev) => ({ ...prev, [doc]: "Asociación guardada. Se aplica al terminar el recálculo." }));
+      setRowMessage((prev) => ({ ...prev, [row.llave]: "Asociación guardada. Se aplica al terminar el recálculo." }));
       fetchAsociarData(doc);
-      fireTrigger(inscripcion.llave);
+      fireTrigger(row.llave);
     } catch (err) {
-      setAsociarError((prev) => ({ ...prev, [doc]: err instanceof Error ? err.message : "Error inesperado" }));
-      // El servidor revalida el sello y cuánto le queda al pago, así que un rechazo
-      // suele significar que este panel está desactualizado (otra pestaña, o el
-      // botón de al lado hace 14 segundos). Releer deja a la vista el estado real
-      // en vez de un panel que sigue ofreciendo plata que ya no está.
+      setRowError((prev) => ({ ...prev, [row.llave]: err instanceof Error ? err.message : "Error inesperado" }));
+      // El servidor revalida el sello, cuánto le queda al pago y que la cuota no
+      // esté declarada pagada por Cartera, así que un rechazo suele significar que
+      // este panel está desactualizado (otra pestaña, o el botón de al lado hace 14
+      // segundos). Releer deja a la vista el estado real en vez de un panel que
+      // sigue ofreciendo plata que ya no está.
       fetchAsociarData(doc);
     } finally {
       setRowSaving(null);
@@ -821,8 +849,9 @@ export default function CarteraPreventivaView() {
   // existe: son dos pasos a propósito, enviar y después asociar a la cuota que
   // corresponda. El servidor revalida las 6 condiciones dentro de la función de
   // base y responde 409; acá no se valida nada que allá no se vuelva a mirar.
-  const handleEnviarSaldo = async (doc: string, pago: PagoAsociable, documentoDestino: string, monto: number) => {
-    const key = `${doc}:${pago.matching_key}`;
+  const handleEnviarSaldo = async (row: CarteraPreventivaRow, pago: PagoAsociable, documentoDestino: string, monto: number) => {
+    const doc = row.cruce_access;
+    const key = `${row.llave}:${pago.matching_key}`;
     setRowSaving(`enviar:${key}`);
     setEnviarError((prev) => ({ ...prev, [key]: "" }));
     try {
@@ -841,9 +870,9 @@ export default function CarteraPreventivaView() {
       setEnviarDestino((prev) => ({ ...prev, [key]: null }));
       setEnviarDocInput((prev) => ({ ...prev, [key]: "" }));
       setEnviarMontoInput((prev) => ({ ...prev, [key]: "" }));
-      setAsociarMessage((prev) => ({
+      setRowMessage((prev) => ({
         ...prev,
-        [doc]: `Se enviaron ${fmtMonto(monto)} al documento ${documentoDestino.trim()}. Allá aparece como saldo a favor, listo para asociar a una cuota.`,
+        [row.llave]: `Se enviaron ${fmtMonto(monto)} al documento ${documentoDestino.trim()}. Allá aparece como saldo a favor, listo para asociar a una cuota.`,
       }));
       // El restante del pago bajó y el ledger tiene una fila nueva: hay que releer
       // los dos, o el panel sigue ofreciendo plata que ya se fue.
@@ -2020,7 +2049,12 @@ export default function CarteraPreventivaView() {
                   const pagoChanged = pagoValue.trim() === ""
                     ? pagoGuardado
                     : Number.isFinite(pagoNum) && pagoNum !== pagoActual;
-                  const puedeAsociar = multiInscripcionDocs.has(row.cruce_access);
+                  // El documento tiene plata que el panel puede ofrecer: algún pago
+                  // con restante, contado igual que lo cuenta GET /asociar. Desde el
+                  // 2026-10-02 ya NO exige 2+ inscripciones (§6 del spec, decisión
+                  // del usuario): con el panel por cuota la pregunta es "a esta
+                  // cuota, ¿qué plata le entra?", y vale con una sola inscripción.
+                  const hayPagoDelDoc = multiInscripcionDocs.has(row.cruce_access);
                   // Regla #4/#7: mensaje + botón de asociar saldo a favor.
                   // Unión de las dos señales, sin repetir un saldo que caiga por ambas.
                   const porDoc    = saldosPorDocumento.get((row.cruce_access || "").trim()) || [];
@@ -2049,7 +2083,39 @@ export default function CarteraPreventivaView() {
                   // 🔴 Lo ÚNICO que nunca recibe plata es una línea de deuda cuya cuota
                   // original siga abierta: ahí la plata va en la original, si no se
                   // pagaría la misma deuda dos veces (regla del 30 de julio).
-                  const puedeAsociarSaldo = !!grupo && grupo.total > 0 && !row.original_abierta;
+                  //
+                  // 🔴 Una cuota declarada "pagada por Cartera" tampoco recibe plata
+                  // (spec del 2026-10-02). Las dos mitades de la señal:
+                  //   · ya aplicada por el pipeline → se ve en la fila;
+                  //   · recién cerrada, con el reproceso corriendo → la fila no dice
+                  //     NADA (el cierre vive en un override), y entonces la única
+                  //     señal que hay en la pantalla es que GET /asociar la dejó
+                  //     fuera de `inscripciones`, que es justo lo que ese endpoint
+                  //     decide con `fetchCerradasManual`. Se le cree a él en vez de
+                  //     volver a preguntar los overrides desde acá.
+                  // ⚠️ La ausencia solo significa "cerrada" para una cuota que el
+                  // endpoint SÍ habría listado: una cuota ya cubierta no está en esa
+                  // lista y está perfectamente bien (regla del 14/09).
+                  const datosDelDoc   = asociarData[row.cruce_access];
+                  const deberiaEstar  = pendiente || avisoSinAplicar;
+                  const cerradaPorCartera =
+                    row.notificacion === "CARTERA" || row.medio_pago === "Cartera" ||
+                    (deberiaEstar && !!datosDelDoc
+                      && !datosDelDoc.inscripciones.some((i) => i.llave === row.llave));
+                  // Lo único que nunca recibe plata, además, es una línea de deuda
+                  // cuya cuota original siga abierta.
+                  const puedeRecibirPlata = !row.original_abierta && !cerradaPorCartera;
+                  const puedeAsociarSaldo = !!grupo && grupo.total > 0 && puedeRecibirPlata;
+                  // Asociar un PAGO (no un saldo) sigue pidiendo que la cuota esté
+                  // pendiente o traiga el aviso `PAGO SIN APLICAR`, igual que antes:
+                  // lo que cambió es a qué documentos se les ofrece, no a qué cuotas.
+                  // ⚠️ `ofrecePagos` (se ve la sección) y `puedeAsociarPago` (se
+                  // pueden apretar los botones) son distintos a propósito: en una
+                  // cuota que no puede recibir plata, la sección se sigue viendo para
+                  // dejar MANDAR ese pago a otro documento —que es el único camino que
+                  // había y no se quita—, con el motivo escrito arriba.
+                  const ofrecePagos      = hayPagoDelDoc && deberiaEstar;
+                  const puedeAsociarPago = ofrecePagos && puedeRecibirPlata;
                   // Enviar ese saldo a otra persona NO exige que esta cuota necesite
                   // dinero: el caso normal es justo el contrario — la cuota quedó
                   // pagada y lo que sobró es de otra cédula (un diplomado de 2 cupos
@@ -2111,19 +2177,23 @@ export default function CarteraPreventivaView() {
                     className: "text-slate-700",
                     title: "Suelta los pagos de la cuota y la cierra por Cartera, de un paso",
                   });
-                  if (puedeAsociar && (pendiente || avisoSinAplicar)) acciones.push({
+                  // UNA sola acción para la plata que le entra a esta cuota. Antes
+                  // eran dos —"⚠️ Asociar" (pagos del documento) y "Asociar pago"
+                  // (saldos a favor)— que abrían dos paneles distintos sobre la misma
+                  // fila, y ninguno de los dos decía sobre qué cuota se trabajaba.
+                  // El panel que abre tiene las dos secciones.
+                  if (ofrecePagos || tieneSaldo) acciones.push({
                     key: "asociar",
-                    label: asociarOpen[row.cruce_access] ? "Ocultar asociar" : "⚠️ Asociar",
+                    label: asociarOpen[row.llave]
+                      ? "Ocultar asociar"
+                      // Sin nada que asociar a ESTA cuota, lo único que ofrece el
+                      // panel es mandar el saldo a otro documento: la etiqueta lo
+                      // dice, para que nadie lo abra esperando otra cosa. Es el caso
+                      // normal de una cuota ya pagada cuyo sobrante es de otra cédula.
+                      : (puedeAsociarPago || puedeAsociarSaldo) ? "⚠️ Asociar pago" : "Enviar a otro documento",
                     onClick: () => toggleAsociarPanel(row),
-                    className: "text-amber-700",
-                  });
-                  if (tieneSaldo) acciones.push({
-                    key: "saldo",
-                    label: asociarSaldoOpen[row.llave]
-                      ? "Ocultar saldo"
-                      : puedeAsociarSaldo ? "Asociar pago" : "Enviar a otro documento",
-                    onClick: () => setAsociarSaldoOpen((prev) => ({ ...prev, [row.llave]: !prev[row.llave] })),
-                    className: "text-teal-700",
+                    className: (puedeAsociarPago || puedeAsociarSaldo) ? "text-amber-700" : "text-teal-700",
+                    title: "Muestra los pagos y los saldos del documento que le pueden entrar a ESTA cuota",
                   });
                   if (necesitaUltimaCuota(row)) acciones.push({
                     key: "ultima",
@@ -2154,8 +2224,11 @@ export default function CarteraPreventivaView() {
                   // Los formularios viven DEBAJO de la fila, al ancho de la tabla
                   // (§1.3): son listas con montos, casillas y campo de documento
                   // destino — dentro de un menú de ~250 px quedan peor que hoy.
-                  const panelAbierto = cierreOpen[row.llave] || asociarOpen[row.cruce_access]
-                    || descartarCerrarOpen[row.llave] || asociarSaldoOpen[row.llave] || descartarOpen[row.llave];
+                  // 🔴 Las cinco llaves van por `row.llave`. El asociar era la única
+                  // que iba por documento, y era lo que expandía todas las filas de
+                  // la persona a la vez.
+                  const panelAbierto = cierreOpen[row.llave] || asociarOpen[row.llave]
+                    || descartarCerrarOpen[row.llave] || descartarOpen[row.llave];
                   return (
                   <Fragment key={row.id}>
                   <tr className={`hover:bg-gray-50/70 transition-colors duration-100 align-top ${rowTint(row)}`}>
@@ -2402,170 +2475,233 @@ export default function CarteraPreventivaView() {
                             )}
                           </div>
                         )}
-                        {asociarOpen[row.cruce_access] && (
-                          <div className="animate-fade-in bg-amber-50/60 border border-amber-200/80 rounded-lg p-2 space-y-1.5 w-64">
+                        {/* ── El panel de asociar, por CUOTA ─────────────────────────
+                            Hasta el 2026-10-02 esto preguntaba "este pago, ¿a qué cuota
+                            va?": recorría los pagos y, dentro de cada uno, TODAS las
+                            cuotas destino del documento. La cuota en la que se había
+                            apretado no participaba —era una más de la lista, sin ninguna
+                            marca—, así que se elegía "una random de las que están ahí" y
+                            la plata se iba a otra cuota sin que nada avisara. Es lo que
+                            pasó el 2 de octubre con el documento 1099208759.
+
+                            Ahora la cuota destino está FIJA (es la fila) y el panel es
+                            una lista de ORIGEN de plata: los pagos del documento con
+                            restante, los saldos a favor, y el envío a otro documento. */}
+                        {asociarOpen[row.llave] && (
+                          <div className="animate-fade-in bg-amber-50/30 border border-amber-200/80 rounded-lg p-2 space-y-1.5">
+                            {/* El encabezado nombra la cuota: es lo que deja sin duda a
+                                dónde va la plata que se apriete abajo. */}
+                            <div className="pb-1 border-b border-amber-200/70">
+                              <p className="text-[11px] font-medium text-amber-900">
+                                Plata que le puede entrar a la cuota {fmt(row.llave)}
+                              </p>
+                              <p className="text-[11px] text-amber-800">
+                                {fmt(row.inscrip)} · vence {fmt(row.fecha_vencimiento)} ·{" "}
+                                {cuotaRestante > 0 ? `le falta ${fmtMonto(cuotaRestante)}` : "ya está cubierta"}
+                              </p>
+                            </div>
+                            {/* Por qué los botones de asociar pueden no estar. Se escribe
+                                arriba, no al apretar: el servidor también lo rechaza
+                                (409), pero enterarse antes es la diferencia. */}
+                            {cerradaPorCartera && (
+                              <p className="text-[11px] text-amber-800">{ERROR_CERRADA_POR_CARTERA}</p>
+                            )}
+                            {!cerradaPorCartera && row.original_abierta && (
+                              <p className="text-[11px] text-amber-800">
+                                Esta es una línea de falta de pago y su cuota original sigue abierta: la plata
+                                se asocia en la original, o se pagaría dos veces la misma deuda.
+                              </p>
+                            )}
+                            <div className="flex flex-wrap items-start gap-3">
+                            {/* ── 1. Los pagos del documento con plata sin repartir ── */}
+                            {ofrecePagos && (
+                            <div className="bg-white border border-amber-200/80 rounded-lg p-1.5 space-y-1 w-80">
                             {asociarLoading[row.cruce_access] ? (
                               <p className="text-xs text-gray-500">Cargando...</p>
                             ) : asociarError[row.cruce_access] ? (
                               <p className="text-xs text-red-600">{asociarError[row.cruce_access]}</p>
                             ) : (
                               <>
-                                <p className="text-[11px] text-amber-800">
-                                  Hay {asociarData[row.cruce_access]?.pagos.length ?? 0} pago(s) de este documento, falta asociar a una inscripción.
-                                </p>
-                                {(asociarData[row.cruce_access]?.pagos || []).map((pago) => (
-                                  <div key={pago.matching_key} className="bg-white border border-gray-200 rounded-lg p-1.5 space-y-1">
-                                    <p className="text-[11px] text-gray-600">
-                                      {fmt(pago.transaction_code_1)} · {fmt(pago.payment_date)} · restante {fmtMonto(pago.restante)}
+                                {(() => {
+                                  const pagosDelDoc = asociarData[row.cruce_access]?.pagos || [];
+                                  return pagosDelDoc.length === 0 ? (
+                                    <p className="text-[11px] text-gray-500">
+                                      No hay pagos de este documento con plata por repartir.
                                     </p>
-                                    {(asociarData[row.cruce_access]?.inscripciones || []).map((ins) => {
-                                      const falta  = faltaDeCuota(ins);
-                                      const exacto = Math.abs(falta - pago.restante) < 1;
-                                      const actionKey = `${pago.matching_key}:${ins.llave}`;
-                                      const savingAction = rowSaving === actionKey;
-                                      const otroValorKey = `${pago.matching_key}:${ins.llave}`;
-                                      return (
-                                        <div key={ins.llave} className="flex items-center justify-between gap-1 text-[11px]">
-                                          <span className={exacto ? "text-emerald-700 font-medium" : "text-gray-600"}>
-                                            {ins.inscrip} ({fmt(ins.sistema_financiero)}) — {fmtMonto(falta)}
-                                            {exacto && " ✓ calza"}
-                                          </span>
-                                          <div className="flex items-center gap-1">
-                                            <button
-                                              onClick={() => handleAsociar(row.cruce_access, pago, ins, pago.restante)}
-                                              disabled={savingAction}
-                                              className="px-1.5 py-0.5 rounded bg-brand-700 text-white hover:bg-brand-800 disabled:opacity-50"
-                                            >
-                                              Todo
-                                            </button>
-                                            <input
-                                              type="text"
-                                              inputMode="numeric"
-                                              placeholder="otro $"
-                                              value={montoOtroValor[otroValorKey] || ""}
-                                              onChange={(e) => setMontoOtroValor((prev) => ({ ...prev, [otroValorKey]: e.target.value }))}
-                                              onBlur={(e) => setMontoOtroValor((prev) => ({ ...prev, [otroValorKey]: formatMonto(e.target.value) }))}
-                                              className="w-24 border border-gray-300 rounded px-1 py-0.5"
-                                            />
-                                            <button
-                                              onClick={() => {
-                                                const monto = parseMonto(montoOtroValor[otroValorKey]);
-                                                if (Number.isFinite(monto) && monto > 0) handleAsociar(row.cruce_access, pago, ins, monto);
-                                              }}
-                                              disabled={savingAction}
-                                              className="px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
-                                            >
-                                              OK
-                                            </button>
-                                          </div>
-                                        </div>
-                                      );
-                                    })}
-                                    {/* Enviar a otro documento: un pago puede cubrir a dos
-                                        personas (una empresa por su empleado, un familiar por
-                                        otro). Hasta acá la plata solo se podía mover dentro
-                                        del documento del pagador. */}
-                                    {(() => {
-                                      const key = `${row.cruce_access}:${pago.matching_key}`;
-                                      const destino = enviarDestino[key];
-                                      const docDestino = (enviarDocInput[key] || "").trim();
-                                      const savingEnvio = rowSaving === `enviar:${key}`;
-                                      const montoEnvio = enviarMontoInput[key]
-                                        ? parseMonto(enviarMontoInput[key])
-                                        : pago.restante;
-                                      const montoValido = Number.isFinite(montoEnvio) && montoEnvio > 0
-                                        && montoEnvio <= pago.restante + 0.01;
-                                      return (
-                                        <div className="pt-1 border-t border-gray-100">
-                                          <button
-                                            onClick={() => setEnviarOpen((prev) => ({ ...prev, [key]: !prev[key] }))}
-                                            className="text-[11px] px-1.5 py-0.5 rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50 active:scale-95 transition-all duration-200 ease-(--ease-spring)"
-                                          >
-                                            {enviarOpen[key] ? "Ocultar envío" : "Enviar saldo a otro documento"}
-                                          </button>
-                                          {enviarOpen[key] && (
-                                            <div className="animate-fade-in mt-1 space-y-1 bg-indigo-50/60 border border-indigo-200/80 rounded-lg p-1.5">
-                                              <div className="flex items-center gap-1">
+                                  ) : (
+                                    <>
+                                      <p className="text-[11px] text-amber-800">
+                                        {pagosDelDoc.length} pago(s) de este documento con plata sin repartir
+                                      </p>
+                                      {pagosDelDoc.map((pago) => {
+                                        // §4.3: "Todo" PROPONE lo razonable — el menor entre lo
+                                        // que le queda al pago y lo que le falta a la cuota. Antes
+                                        // proponía el restante entero del pago, que es lo que
+                                        // convertía un clic rápido en un sobrepago. No BLOQUEA: la
+                                        // casilla "otro $" acepta más, porque desde el 14/09 una
+                                        // cuota ya cubierta sí puede recibir plata (y es lo que
+                                        // hace que la fila diga "PAGA N CUOTAS").
+                                        // ⚠️ El `|| pago.restante` no es decorativo: en una cuota ya
+                                        // cubierta `cuotaRestante` es 0 y "Todo" no propondría nada.
+                                        const montoTodo = Math.min(pago.restante, cuotaRestante || pago.restante);
+                                        const exacto = Math.abs(cuotaRestante - pago.restante) < 1;
+                                        const actionKey = `${pago.matching_key}:${row.llave}`;
+                                        const savingAction = rowSaving === actionKey;
+                                        // Todo lo que se teclea va por PAGO y por CUOTA: el panel
+                                        // ahora puede estar abierto en dos cuotas de la misma
+                                        // persona, y una llave por documento compartiría el valor.
+                                        const otroValorKey = actionKey;
+                                        const key = `${row.llave}:${pago.matching_key}`;
+                                        const destino = enviarDestino[key];
+                                        const docDestino = (enviarDocInput[key] || "").trim();
+                                        const savingEnvio = rowSaving === `enviar:${key}`;
+                                        const montoEnvio = enviarMontoInput[key]
+                                          ? parseMonto(enviarMontoInput[key])
+                                          : pago.restante;
+                                        const montoValido = Number.isFinite(montoEnvio) && montoEnvio > 0
+                                          && montoEnvio <= pago.restante + 0.01;
+                                        return (
+                                          <div key={pago.matching_key} className="bg-white border border-gray-200 rounded-lg p-1.5 space-y-1">
+                                            <p className={`text-[11px] ${exacto ? "text-emerald-700 font-medium" : "text-gray-600"}`}>
+                                              {fmt(pago.transaction_code_1)} · {fmt(pago.payment_date)} · restante {fmtMonto(pago.restante)}
+                                              {exacto && " ✓ calza"}
+                                            </p>
+                                            {puedeAsociarPago && (
+                                              <div className="flex items-center gap-1 text-[11px]">
+                                                <button
+                                                  onClick={() => handleAsociar(row, pago, montoTodo)}
+                                                  disabled={savingAction}
+                                                  className="px-1.5 py-0.5 rounded bg-brand-700 text-white hover:bg-brand-800 disabled:opacity-50"
+                                                >
+                                                  {cuotaRestante && cuotaRestante < pago.restante ? "Todo lo que falta" : "Todo"}
+                                                </button>
                                                 <input
                                                   type="text"
-                                                  placeholder="Documento destino"
-                                                  value={enviarDocInput[key] || ""}
-                                                  onChange={(e) => {
-                                                    setEnviarDocInput((prev) => ({ ...prev, [key]: e.target.value }));
-                                                    setEnviarDestino((prev) => ({ ...prev, [key]: null }));
-                                                  }}
-                                                  className="flex-1 min-w-0 text-[11px] border border-gray-300 rounded px-1 py-0.5"
+                                                  inputMode="numeric"
+                                                  placeholder={formatMonto(montoTodo)}
+                                                  value={montoOtroValor[otroValorKey] || ""}
+                                                  onChange={(e) => setMontoOtroValor((prev) => ({ ...prev, [otroValorKey]: e.target.value }))}
+                                                  onBlur={(e) => setMontoOtroValor((prev) => ({ ...prev, [otroValorKey]: formatMonto(e.target.value) }))}
+                                                  className="w-24 border border-gray-300 rounded px-1 py-0.5"
                                                 />
                                                 <button
-                                                  onClick={() => handleBuscarDestino(key, docDestino)}
-                                                  disabled={!docDestino || enviarBuscando[key]}
-                                                  className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                                                  onClick={() => {
+                                                    const monto = parseMonto(montoOtroValor[otroValorKey]);
+                                                    if (Number.isFinite(monto) && monto > 0) handleAsociar(row, pago, monto);
+                                                  }}
+                                                  disabled={savingAction}
+                                                  className="px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
                                                 >
-                                                  {enviarBuscando[key] ? "..." : "Buscar"}
+                                                  OK
                                                 </button>
                                               </div>
-                                              {destino && (
-                                                destino.inscripciones.length === 0 ? (
-                                                  <p className="text-[11px] text-red-600">
-                                                    Ese documento no tiene cuotas abiertas en la cartera: la plata no se
-                                                    vería en ninguna pantalla.
-                                                  </p>
-                                                ) : (
-                                                  <>
-                                                    <p className="text-[11px] text-indigo-900">
-                                                      ✓ {fmt(destino.cliente)}
-                                                    </p>
-                                                    <p className="text-[11px] text-indigo-700">
-                                                      {destino.inscripciones.length} inscripción(es) con cuotas abiertas
-                                                      ({destino.inscripciones.join(", ")}) · debe {fmtMonto(destino.debe)}
-                                                    </p>
-                                                    <div className="flex items-center gap-1">
-                                                      <input
-                                                        type="text"
-                                                        inputMode="numeric"
-                                                        placeholder={formatMonto(pago.restante)}
-                                                        value={enviarMontoInput[key] || ""}
-                                                        onChange={(e) => setEnviarMontoInput((prev) => ({ ...prev, [key]: e.target.value }))}
-                                                        onBlur={(e) => setEnviarMontoInput((prev) => ({ ...prev, [key]: formatMonto(e.target.value) }))}
-                                                        className="w-24 text-[11px] border border-gray-300 rounded px-1 py-0.5"
-                                                      />
-                                                      <button
-                                                        onClick={() => handleEnviarSaldo(row.cruce_access, pago, docDestino, montoEnvio)}
-                                                        disabled={savingEnvio || !montoValido}
-                                                        title={montoValido ? undefined : `A este pago solo le quedan ${fmtMonto(pago.restante)}`}
-                                                        className="text-[11px] px-1.5 py-0.5 rounded bg-indigo-700 text-white hover:bg-indigo-800 disabled:opacity-50"
-                                                      >
-                                                        {savingEnvio ? "Enviando..." : "Enviar saldo"}
-                                                      </button>
-                                                    </div>
-                                                    <p className="text-[11px] text-gray-500">
-                                                      Por defecto se envía todo el restante. La plata llega como saldo a
-                                                      favor de esa persona y allá se asocia a la cuota que corresponda.
-                                                    </p>
-                                                  </>
-                                                )
-                                              )}
-                                              {enviarError[key] && (
-                                                <p className="text-[11px] text-red-600">{enviarError[key]}</p>
+                                            )}
+                                            {/* Enviar a otro documento: un pago puede cubrir a dos
+                                                personas (una empresa por su empleado, un familiar
+                                                por otro). Va siempre, incluso donde no se puede
+                                                asociar — ahí suele ser la única salida. */}
+                                            <div className="pt-1 border-t border-gray-100">
+                                              <button
+                                                onClick={() => setEnviarOpen((prev) => ({ ...prev, [key]: !prev[key] }))}
+                                                className="text-[11px] px-1.5 py-0.5 rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50 active:scale-95 transition-all duration-200 ease-(--ease-spring)"
+                                              >
+                                                {enviarOpen[key] ? "Ocultar envío" : "Enviar saldo a otro documento"}
+                                              </button>
+                                              {enviarOpen[key] && (
+                                                <div className="animate-fade-in mt-1 space-y-1 bg-indigo-50/60 border border-indigo-200/80 rounded-lg p-1.5">
+                                                  <div className="flex items-center gap-1">
+                                                    <input
+                                                      type="text"
+                                                      placeholder="Documento destino"
+                                                      value={enviarDocInput[key] || ""}
+                                                      onChange={(e) => {
+                                                        setEnviarDocInput((prev) => ({ ...prev, [key]: e.target.value }));
+                                                        setEnviarDestino((prev) => ({ ...prev, [key]: null }));
+                                                      }}
+                                                      className="flex-1 min-w-0 text-[11px] border border-gray-300 rounded px-1 py-0.5"
+                                                    />
+                                                    <button
+                                                      onClick={() => handleBuscarDestino(key, docDestino)}
+                                                      disabled={!docDestino || enviarBuscando[key]}
+                                                      className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                                                    >
+                                                      {enviarBuscando[key] ? "..." : "Buscar"}
+                                                    </button>
+                                                  </div>
+                                                  {destino && (
+                                                    destino.inscripciones.length === 0 ? (
+                                                      <p className="text-[11px] text-red-600">
+                                                        Ese documento no tiene cuotas abiertas en la cartera: la plata no se
+                                                        vería en ninguna pantalla.
+                                                      </p>
+                                                    ) : (
+                                                      <>
+                                                        <p className="text-[11px] text-indigo-900">
+                                                          ✓ {fmt(destino.cliente)}
+                                                        </p>
+                                                        <p className="text-[11px] text-indigo-700">
+                                                          {destino.inscripciones.length} inscripción(es) con cuotas abiertas
+                                                          ({destino.inscripciones.join(", ")}) · debe {fmtMonto(destino.debe)}
+                                                        </p>
+                                                        <div className="flex items-center gap-1">
+                                                          <input
+                                                            type="text"
+                                                            inputMode="numeric"
+                                                            placeholder={formatMonto(pago.restante)}
+                                                            value={enviarMontoInput[key] || ""}
+                                                            onChange={(e) => setEnviarMontoInput((prev) => ({ ...prev, [key]: e.target.value }))}
+                                                            onBlur={(e) => setEnviarMontoInput((prev) => ({ ...prev, [key]: formatMonto(e.target.value) }))}
+                                                            className="w-24 text-[11px] border border-gray-300 rounded px-1 py-0.5"
+                                                          />
+                                                          <button
+                                                            onClick={() => handleEnviarSaldo(row, pago, docDestino, montoEnvio)}
+                                                            disabled={savingEnvio || !montoValido}
+                                                            title={montoValido ? undefined : `A este pago solo le quedan ${fmtMonto(pago.restante)}`}
+                                                            className="text-[11px] px-1.5 py-0.5 rounded bg-indigo-700 text-white hover:bg-indigo-800 disabled:opacity-50"
+                                                          >
+                                                            {savingEnvio ? "Enviando..." : "Enviar saldo"}
+                                                          </button>
+                                                        </div>
+                                                        <p className="text-[11px] text-gray-500">
+                                                          Por defecto se envía todo el restante. La plata llega como saldo a
+                                                          favor de esa persona y allá se asocia a la cuota que corresponda.
+                                                        </p>
+                                                      </>
+                                                    )
+                                                  )}
+                                                  {enviarError[key] && (
+                                                    <p className="text-[11px] text-red-600">{enviarError[key]}</p>
+                                                  )}
+                                                </div>
                                               )}
                                             </div>
-                                          )}
-                                        </div>
-                                      );
-                                    })()}
-                                  </div>
-                                ))}
-                                {asociarMessage[row.cruce_access] && (
-                                  <p className="text-[11px] text-green-700">{asociarMessage[row.cruce_access]}</p>
-                                )}
+                                          </div>
+                                        );
+                                      })}
+                                    </>
+                                  );
+                                })()}
                               </>
                             )}
-                          </div>
-                        )}
-                        {tieneSaldo && asociarSaldoOpen[row.llave] && (
+                            </div>
+                            )}
+                            {/* Puede quedar vacío sin que nadie cierre el panel: al
+                                asociar el último saldo, su fila sale del ledger. Sin esta
+                                línea el panel quedaría con el encabezado solo. */}
+                            {!ofrecePagos && !tieneSaldo && (
+                              <p className="text-[11px] text-gray-500">
+                                Ya no queda plata de este documento por repartir.
+                              </p>
+                            )}
+                            {/* ── 2. Los saldos a favor del documento ──────────────── */}
+                            {tieneSaldo && (
                           <div className="bg-teal-50/60 border border-teal-200/80 rounded-lg p-1.5 space-y-1 w-80">
+                            {/* Decía "Esta inscripción tiene un saldo a favor de X". Con
+                                el panel por cuota eso se lee como si el saldo fuera de la
+                                cuota de la fila, y no: es del DOCUMENTO (o del correo), y
+                                desde acá se le puede meter a ESTA cuota. */}
                             <p className="text-[11px] text-teal-800">
-                              Esta inscripción tiene un saldo a favor de {fmtMonto(grupo!.total)}
+                              Saldo a favor del documento: {fmtMonto(grupo!.total)} en {grupo!.rows.length} fila(s)
                             </p>
                             <div className="animate-fade-in space-y-1 pt-1">
                               {grupo!.rows.map((saldo) => {
@@ -2730,6 +2866,9 @@ export default function CarteraPreventivaView() {
                                     </div>
                                   );
                               })}
+                            </div>
+                          </div>
+                            )}
                             </div>
                           </div>
                         )}
