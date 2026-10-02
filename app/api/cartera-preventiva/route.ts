@@ -195,10 +195,38 @@ export async function GET(req: NextRequest) {
     for (const o of originales || []) abiertaPorLlave.set(o.llave, o.pago_confirmado == null);
   }
 
+  // §6 del spec del 2/10, opción (a): una cuota cerrada por Cartera no ofrece
+  // "Descartar pago" (`puedeDescartar` exige que el medio no sea `Cartera` ni la
+  // notificación `CARTERA`, y está así a propósito: un cierre por Cartera no tiene
+  // pago que descartar). Pero si además tiene un pago encima —el caso del 2 de
+  // octubre, cobrada dos veces— no había forma de soltarlo desde la pantalla: se
+  // deshizo por SQL. La pantalla necesita saberlo ANTES de abrir el panel, porque
+  // las asociaciones se cargan recién al desplegarlo.
+  //
+  // Se pregunta SOLO por las cerradas por Cartera de la página (hoy 27 en toda la
+  // cartera, 0 con pago encima), así que la condición queda estrecha: aparece
+  // exactamente en el caso roto y en ningún otro. En las demás filas ni se consulta.
+  const llavesCerradasPorCartera = data
+    .filter((r) => r.medio_pago === "Cartera" || r.notificacion === "CARTERA")
+    .map((r) => r.llave as string);
+  const conAsociacion = new Set<string>();
+  // Por lotes de 200, como todo `.in()` de este repo: una lista larga vuelve
+  // cortada sin error, y acá eso se lee como "esta cuota no tiene pago encima" —
+  // justo al revés de lo que hay que mostrar.
+  for (let i = 0; i < llavesCerradasPorCartera.length; i += 200) {
+    const { data: asoc, error: asocError } = await supabase
+      .from("pago_asociaciones")
+      .select("llave")
+      .in("llave", llavesCerradasPorCartera.slice(i, i + 200));
+    if (asocError) return NextResponse.json({ error: asocError.message }, { status: 500 });
+    for (const a of asoc || []) conAsociacion.add(a.llave as string);
+  }
+
   const enriched = data.map((row) => ({
     ...row,
     // false también cuando no es línea de deuda o cuando la original ya no existe.
     original_abierta: abiertaPorLlave.get(baseDeLlave((row.llave as string) || "")) === true,
+    tiene_asociaciones: conAsociacion.has(row.llave as string),
   }));
 
   logAudit({

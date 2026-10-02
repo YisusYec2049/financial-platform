@@ -166,6 +166,11 @@ type CarteraPreventivaRow = {
   // abierta. Mientras eso sea cierto la plata se asocia en la original — la
   // línea es solo el reflejo de su `diferencia` y el pipeline la baja solo.
   original_abierta?: boolean;
+  // Lo calcula GET /api/cartera-preventiva, y SOLO para las cuotas cerradas por
+  // Cartera: esa cuota tiene al menos un pago en `pago_asociaciones`. Es lo que
+  // deja soltarlo desde la pantalla en el único caso donde eso hace falta (ver
+  // `puedeDescartarCerradaPorCartera` más abajo).
+  tiene_asociaciones?: boolean;
 };
 
 type PagoAsociable = {
@@ -2059,6 +2064,18 @@ export default function CarteraPreventivaView() {
                   // ya aplicado — un cierre manual de cartera no tiene pago
                   // asociado que descartar.
                   const puedeDescartar = !pendiente && row.medio_pago !== "Cartera" && row.notificacion !== "CARTERA";
+                  // La excepción, y la única: una cuota cerrada por Cartera QUE TENGA
+                  // un pago encima. Eso no debería existir —desde el 2/10 las cuatro
+                  // puertas de asociación la rechazan— pero el caso de ese día
+                  // (doc 1099208759: cerrada por Cartera y comiéndose $1.040.000, con
+                  // 29 segundos entre los dos clics) solo se pudo deshacer por SQL.
+                  // 🔴 `puedeDescartar` NO se toca: sigue dejando fuera las cerradas por
+                  // Cartera, que es lo correcto — un cierre por Cartera normal no tiene
+                  // pago que soltar, y ofrecer el botón ahí abriría un panel vacío en las
+                  // 27 cuotas cerradas de la cartera. Hoy esta condición alcanza 0 filas.
+                  const puedeDescartarCerradaPorCartera =
+                    (row.medio_pago === "Cartera" || row.notificacion === "CARTERA") &&
+                    row.tiene_asociaciones === true;
                   // Las acciones de la fila, en el orden fijo del spec (§1.1): no
                   // depende de la cuota, simplemente no se listan las que no aplican.
                   // 🔴 Las SEÑALES no entran acá y siguen visibles en la celda
@@ -2074,12 +2091,14 @@ export default function CarteraPreventivaView() {
                     className: "text-gray-700",
                     title: "La cuota no tiene pago identificado — declararla pagada por cartera",
                   });
-                  if (puedeDescartar) acciones.push({
+                  if (puedeDescartar || puedeDescartarCerradaPorCartera) acciones.push({
                     key: "descartar",
                     label: descartarOpen[row.llave] ? "Ocultar descartar" : "Descartar pago",
                     onClick: () => toggleDescartarPanel(row),
                     className: "text-red-700",
-                    title: "Suelta un pago de esta cuota; vuelve como saldo a favor del documento",
+                    title: puedeDescartarCerradaPorCartera
+                      ? "Esta cuota está cerrada por Cartera y además tiene un pago aplicado: suéltalo acá; vuelve como saldo a favor del documento"
+                      : "Suelta un pago de esta cuota; vuelve como saldo a favor del documento",
                   });
                   // Va DEBAJO de "Descartar pago" y no lo reemplaza: a veces solo hay
                   // que descartar, y un botón que además cierre sería un problema
