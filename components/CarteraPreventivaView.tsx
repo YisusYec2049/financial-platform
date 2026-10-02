@@ -280,14 +280,12 @@ export default function CarteraPreventivaView() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [multiInscripcionDocs, setMultiInscripcionDocs] = useState<Set<string>>(new Set());
   const [ultimaCuotaLlaves, setUltimaCuotaLlaves] = useState<Set<string>>(new Set());
-  // 🔴 El abierto/cerrado va por CUOTA (`row.llave`), los DATOS por documento
-  // (`row.cruce_access`). No es un descuido: los pagos y los saldos disponibles son
-  // del documento —una sola consulta sirve para todas sus cuotas—, pero el panel
-  // trabaja sobre la cuota de la fila. Hasta el 2026-10-02 las dos cosas iban por
-  // documento, así que apretar "Asociar" en una cuota expandía TODAS las cuotas de
-  // esa persona (hasta 6) y ninguna quedaba marcada como la elegida. Igualarlas al
-  // revés —todo por llave— haría una consulta por fila.
-  const [asociarOpen, setAsociarOpen]           = useState<Record<string, boolean>>({});
+  // 🔴 Los pagos y los saldos disponibles son del DOCUMENTO —una sola consulta
+  // sirve para todas sus cuotas— pero el panel trabaja sobre la CUOTA del cajón.
+  // Por eso la caché va por `row.cruce_access` mientras lo que está abierto se
+  // identifica por `llave` (`cajonLlave`). Cachear por cuota haría una consulta
+  // por fila; abrir por documento era lo que expandía las 6 cuotas de una persona
+  // a la vez, que es el defecto que se corrigió hoy.
   const [asociarData, setAsociarData]           = useState<Record<string, { inscripciones: InscripcionPendiente[]; pagos: PagoAsociable[] }>>({});
   const [asociarLoading, setAsociarLoading]     = useState<Record<string, boolean>>({});
   const [asociarError, setAsociarError]         = useState<Record<string, string>>({});
@@ -321,9 +319,11 @@ export default function CarteraPreventivaView() {
   // cuota y la cierra por Cartera de un clic. Comparte los datos del panel de
   // descartar (misma consulta), pero su propio abierto/cerrado.
   const [descartarCerrarOpen, setDescartarCerrarOpen] = useState<Record<string, boolean>>({});
-  // Un solo menú de acciones abierto a la vez: son ~100 filas y dos menús
-  // superpuestos no se entienden.
-  const [menuOpen, setMenuOpen]                 = useState<string | null>(null);
+  // La cuota abierta en el CAJÓN lateral, por `llave`. Una sola a la vez: el cajón
+  // es el sitio donde se trabaja una cuota, y dos abiertos no significarían nada.
+  // Reemplaza al menú desplegable de la columna Acciones Y a la fila expandida que
+  // había debajo — los cinco formularios viven ahora acá adentro.
+  const [cajonLlave, setCajonLlave]             = useState<string | null>(null);
   const [stagingCount, setStagingCount]         = useState(0);
   const [activando, setActivando]               = useState(false);
   const [activarMessage, setActivarMessage]     = useState("");
@@ -343,14 +343,13 @@ export default function CarteraPreventivaView() {
   const [cerrandoDia, setCerrandoDia]           = useState(false);
   const [cerrarDiaMessage, setCerrarDiaMessage] = useState("");
   const [cerrarDiaError, setCerrarDiaError]     = useState("");
-  // Ancho visible del contenedor con scroll. Lo usa la fila expandida para no
-  // dibujarse fuera de la pantalla — ver el bloque del panel más abajo.
-  const [panelWidth, setPanelWidth]             = useState(0);
   const searchTimeout                   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef              = useRef<AbortController | null>(null);
+  // El contenedor con scroll de la tabla. Lo lee el efecto que conserva el borde
+  // derecho cuando el cajón la angosta (más abajo), y es lo que hace falta para el
+  // pendiente de devolver la tabla arriba al cambiar de página.
   const tableContainerRef               = useRef<HTMLDivElement>(null);
   const dropdownRef                     = useRef<HTMLDivElement>(null);
-  const menuRef                         = useRef<HTMLDivElement>(null);
 
   const PAGE_SIZE = 100;
 
@@ -386,6 +385,11 @@ export default function CarteraPreventivaView() {
       setData(json.data || []);
       setTotal(json.count || 0);
       setRenglones(typeof json.renglones === "number" ? json.renglones : null);
+      // Cambiar de página o de filtro puede llevarse la cuota que está abierta en
+      // el cajón. Se cierra acá, no en un efecto: el cajón lee la fila de `data`,
+      // y dejarlo abierto sobre una cuota que ya no está en pantalla mostraría
+      // datos viejos — o lo reabriría solo al volver a esa página.
+      setCajonLlave((prev) => prev && (json.data || []).some((r: CarteraPreventivaRow) => r.llave === prev) ? prev : null);
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
       setFetchError(err instanceof Error ? err.message : "Error inesperado");
@@ -514,32 +518,49 @@ export default function CarteraPreventivaView() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // El ancho de lo que se ve de la tabla, no el de la tabla. Son 21 columnas
-  // `whitespace-nowrap`: la tabla mide varios miles de píxeles y el contenedor
-  // muestra una ventana. Se mide con ResizeObserver porque cambia sin recargar
-  // —la barra lateral se ensancha al pasar el mouse— y no basta con medirlo al
-  // montar.
+  // El cajón se cierra con Escape. 🔴 NO se cierra al hacer clic fuera, y es la
+  // decisión que lo define: es un cajón que NO bloquea la tabla (sin fondo
+  // oscurecido), así que todo clic de afuera es alguien usando la tabla —
+  // desplazándola, abriendo otra cuota, corrigiendo una fecha—. Cerrarlo ahí
+  // borraría a mitad lo que se esté llenando.
+  // ⚠️ Y no cierra el cajón si hay una ventana de confirmación encima ("Cerrar
+  // Cartera", "Agregar cuota"): ahí Escape es para esa ventana, y cerrar el cajón
+  // de atrás sería un efecto invisible sobre algo que nadie pidió tocar.
   useEffect(() => {
-    const el = tableContainerRef.current;
-    if (!el) return;
-    const medir = () => setPanelWidth(el.clientWidth);
-    medir();
-    const observer = new ResizeObserver(medir);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  // El menú de acciones de la fila se cierra al hacer clic fuera. Los paneles
-  // que abre viven en la fila expandida, no acá dentro, así que cerrarlo no
-  // cierra nada de lo que la persona esté llenando.
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(null);
-      }
+    const alTeclear = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !cerrarDiaOpen && !agregarOpen) setCajonLlave(null);
     };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", alTeclear);
+    return () => document.removeEventListener("keydown", alTeclear);
+  }, [cerrarDiaOpen, agregarOpen]);
+
+  // 🔴 Abrir el cajón le quita 26 rem de ancho VISIBLE a la tabla, y son 21
+  // columnas `whitespace-nowrap`: lo que estaba pegado al borde derecho —la
+  // columna Acciones, que es donde se acaba de apretar "Abrir"— se sale de la
+  // vista. Se lee como que el cajón tapó la tabla, aunque la tabla termine 20 px
+  // antes (medido sobre la captura del usuario: la tarjeta acaba en el mismo sitio
+  // que las de arriba y lo que hay entre medio es la sombra del cajón).
+  // Así que cuando el ancho cambia, el scroll se corre lo mismo: la tabla se
+  // DESLIZA debajo del cajón en vez de perder sus últimas columnas.
+  // ⚠️ Va con `ResizeObserver` y no al abrir/cerrar: el ancho tarda 300 ms en
+  // llegar —es una transición— y hay que seguirlo fotograma a fotograma. Escribir
+  // `scrollLeft` no cambia ningún tamaño, así que no se realimenta.
+  // ⚠️ Y cubre de paso ensanchar la ventana o la barra lateral del shell, que
+  // mueven el mismo ancho por otro motivo.
+  useEffect(() => {
+    const caja = tableContainerRef.current;
+    if (!caja) return;
+    let anchoPrevio = caja.clientWidth;
+    const observador = new ResizeObserver(() => {
+      const ancho = caja.clientWidth;
+      const delta = anchoPrevio - ancho;
+      anchoPrevio = ancho;
+      if (!delta) return;
+      const tope = caja.scrollWidth - ancho;
+      caja.scrollLeft = Math.max(0, Math.min(tope, caja.scrollLeft + delta));
+    });
+    observador.observe(caja);
+    return () => observador.disconnect();
   }, []);
 
   const buildDownloadParams = () => {
@@ -756,17 +777,6 @@ export default function CarteraPreventivaView() {
     }
   }, []);
 
-  // Abre el panel en la fila donde se apretó, y carga (una sola vez) los pagos del
-  // documento. Las dos llaves son distintas a propósito — ver el comentario del
-  // estado.
-  const toggleAsociarPanel = async (row: CarteraPreventivaRow) => {
-    const doc = row.cruce_access;
-    const willOpen = !asociarOpen[row.llave];
-    setAsociarOpen((prev) => ({ ...prev, [row.llave]: willOpen }));
-    if (willOpen && !asociarData[doc]) {
-      await fetchAsociarData(doc);
-    }
-  };
 
   // Asocia un pago del documento a la cuota de ESTA fila. Ya no recibe una
   // `InscripcionPendiente` elegida en una lista: la cuota destino es la fila, que es
@@ -1508,906 +1518,1072 @@ export default function CarteraPreventivaView() {
     }
   };
 
+  // ── Lo que se deriva de una fila ──────────────────────────────────────────
+  // Vive en UNA función porque desde el 2026-10-02 lo preguntan DOS sitios: la
+  // fila de la tabla y el cajón lateral. Copiarlo en los dos es desincronizarlos,
+  // que es el fallo de siempre en esta app (regla 3.7): el cajón ofrecería
+  // asociar en una cuota que la tabla ya da por cerrada, o al revés.
+  //
+  // ⚠️ Lo que NO entra acá es lo que depende de las casillas editables de la fila
+  // (`cuotaEdits`, `vencEdits`, `pagoEdits`): esas columnas se editan en la tabla
+  // y solo ahí.
+  const derivarFila = (row: CarteraPreventivaRow) => {
+    const parcial = isPagoParcial(row);
+    const saldoFavor = isSaldoFavor(row);
+    const pendiente = !row.fecha_pago;
+    // La cuota que quedó corta y tiene plata esperando (2026-08-21). NO es
+    // `pendiente` —recibió el primer pago—, así que sin esto el panel de asociar
+    // no se ofrecería justo en la fila que lo necesita.
+    const avisoSinAplicar = esPagoSinAplicar(row.notificacion);
+    // Cerrada = alguien la cerró y `pago` ya refleja el valor_pago (si el pago
+    // cambió después, vuelve a ofrecerse el cierre).
+    const cerrada = row.pago_confirmado != null && row.pago_confirmado === row.valor_pago;
+    // El Excel ya trae el pago en `pago` (mismo número, o centavos de
+    // diferencia): la cuota ya está cobrada en el Sistema Financiero, así que no
+    // hay nada que cerrar — y cerrarla duplicaría el pago, porque la fórmula
+    // acumula. Ojo: `pago` es text en la base y puede traer decimales
+    // ("485086.5"), así que va parseFloat — NO parseMonto, que está hecho para la
+    // entrada del usuario ("." = miles).
+    const yaCobrada = !cerrada && row.valor_pago != null
+      && Math.abs(numPago(row.pago) - row.valor_pago) <= 100;
+    // El documento tiene plata que el panel puede ofrecer: algún pago con
+    // restante, contado igual que lo cuenta GET /asociar. Desde el 2026-10-02 ya
+    // NO exige 2+ inscripciones (§6 del spec, decisión del usuario): con el panel
+    // por cuota la pregunta es "a esta cuota, ¿qué plata le entra?", y vale con
+    // una sola inscripción.
+    const hayPagoDelDoc = multiInscripcionDocs.has(row.cruce_access);
+    // Regla #4/#7: documento es la señal FUERTE, correo la débil. Unión de las
+    // dos, sin repetir un saldo que caiga por ambas.
+    const porDoc    = saldosPorDocumento.get((row.cruce_access || "").trim()) || [];
+    const porCorreo = saldosPorCorreo.get((row.correo || "").trim().toLowerCase()) || [];
+    const saldosDeLaFila = Array.from(
+      new Map([...porDoc, ...porCorreo].map((s) => [s.id, s])).values()
+    );
+    const grupo = saldosDeLaFila.length
+      ? { total: saldosDeLaFila.reduce((a, s) => a + Number(s.disponible), 0), rows: saldosDeLaFila }
+      : undefined;
+    const tieneSaldo = !!grupo && grupo.total > 0;
+    // 🔴 Una cuota declarada "pagada por Cartera" no recibe plata (spec del
+    // 2026-10-02). Las dos mitades de la señal:
+    //   · ya aplicada por el pipeline → se ve en la fila;
+    //   · recién cerrada, con el reproceso corriendo → la fila no dice NADA (el
+    //     cierre vive en un override), y entonces la única señal que hay en la
+    //     pantalla es que GET /asociar la dejó fuera de `inscripciones`, que es
+    //     justo lo que ese endpoint decide con `fetchCerradasManual`. Se le cree a
+    //     él en vez de volver a preguntar los overrides desde acá.
+    // ⚠️ La ausencia solo significa "cerrada" para una cuota que el endpoint SÍ
+    // habría listado: una cuota ya cubierta no está en esa lista y está
+    // perfectamente bien (regla del 14/09).
+    const datosDelDoc  = asociarData[row.cruce_access];
+    const deberiaEstar = pendiente || avisoSinAplicar;
+    const cerradaPorCartera =
+      row.notificacion === "CARTERA" || row.medio_pago === "Cartera" ||
+      (deberiaEstar && !!datosDelDoc
+        && !datosDelDoc.inscripciones.some((i) => i.llave === row.llave));
+    // 🔴 Lo único que nunca recibe plata, además, es una línea de deuda cuya cuota
+    // original siga abierta: ahí la plata va en la original, si no se pagaría la
+    // misma deuda dos veces (regla del 30 de julio).
+    const puedeRecibirPlata = !row.original_abierta && !cerradaPorCartera;
+    // Una cuota YA CUBIERTA también puede recibir plata, y por eso acá no se
+    // pregunta si la cuota necesita dinero (hasta el 14/09 había un
+    // `necesitaDinero` en esta condición). Si la persona pagó de más, la fila
+    // TIENE que decirlo: con la plata asociada el pipeline escribe "PAGA N
+    // CUOTAS" / "N CUOTAS + ABONO", que son las etiquetas con las que el área lee
+    // la cartera (caso doc 79670680).
+    const puedeAsociarSaldo = tieneSaldo && puedeRecibirPlata;
+    // ⚠️ `ofrecePagos` (se ve la sección) y `puedeAsociarPago` (se pueden apretar
+    // los botones) son distintos a propósito: en una cuota que no puede recibir
+    // plata, la sección se sigue viendo para dejar MANDAR ese pago a otro
+    // documento —que es el único camino que había y no se quita—, con el motivo
+    // escrito arriba.
+    const ofrecePagos      = hayPagoDelDoc && deberiaEstar;
+    const puedeAsociarPago = ofrecePagos && puedeRecibirPlata;
+    const cuotaRestante = pendiente ? row.valor_a_cobrar : Math.abs(row.diferencia ?? 0);
+    // Regla #3: descartar solo tiene sentido sobre un pago real ya aplicado — un
+    // cierre manual de cartera no tiene pago asociado que descartar.
+    const puedeDescartar = !pendiente && row.medio_pago !== "Cartera" && row.notificacion !== "CARTERA";
+    // La excepción, y la única: una cuota cerrada por Cartera QUE TENGA un pago
+    // encima. Eso no debería existir —desde el 2/10 las cuatro puertas de
+    // asociación la rechazan— pero el caso de ese día (doc 1099208759: cerrada por
+    // Cartera y comiéndose $1.040.000, con 29 segundos entre los dos clics) solo
+    // se pudo deshacer por SQL.
+    // 🔴 `puedeDescartar` NO se toca: sigue dejando fuera las cerradas por
+    // Cartera, que es lo correcto — un cierre por Cartera normal no tiene pago que
+    // soltar. Hoy esta condición alcanza 0 filas.
+    const puedeDescartarCerradaPorCartera =
+      (row.medio_pago === "Cartera" || row.notificacion === "CARTERA") &&
+      row.tiene_asociaciones === true;
+    // Hay DOS tipos de cierre y no se deshacen igual. Para el área es la misma
+    // acción —una sola etiqueta "Reabrir"—; la diferencia es interna: el cierre
+    // por Cartera vive en un override (lo apaga el pipeline en su próxima corrida,
+    // y queda sin Día del Cruce a propósito: esas cuotas no tienen pago real que
+    // cruzar), mientras el cierre con pago asignado se deshace escribiendo la fila
+    // con la inversa de su fórmula.
+    const cierrePorCartera = !pendiente && row.notificacion === "CARTERA";
+    const cierreConPago    = cerrada && row.notificacion !== "CARTERA";
+    return {
+      parcial, saldoFavor, pendiente, avisoSinAplicar, cerrada, yaCobrada,
+      grupo, tieneSaldo, cerradaPorCartera, puedeRecibirPlata,
+      puedeAsociarSaldo, ofrecePagos, puedeAsociarPago, cuotaRestante,
+      puedeDescartar, puedeDescartarCerradaPorCartera, cierrePorCartera, cierreConPago,
+    };
+  };
+  type FilaDerivada = ReturnType<typeof derivarFila>;
+
+  // Las acciones que ofrece una cuota, en el orden fijo del spec del 31/08.
+  // 🔴 "Asociar" NO está acá: desde el cajón dejó de ser una acción que se elige y
+  // pasó a ser la sección principal, siempre a la vista cuando aplica. Las que
+  // quedan abren su formulario dentro del mismo cajón.
+  // 🔴 Las SEÑALES tampoco entran ("Cuota cerrada", "Ya cobrada", el saldo a favor,
+  // el badge del reproceso y los mensajes): no son acciones, son lo que le dice al
+  // área que en esa fila hay trabajo, y se quedan en la celda — detrás de un clic
+  // nadie las ve pasando la tabla.
+  const accionesDe = (row: CarteraPreventivaRow, d: FilaDerivada) => {
+    const acciones: { key: string; label: string; onClick: () => void; className: string; title?: string }[] = [];
+    if (d.pendiente && row.valor_pago == null) acciones.push({
+      key: "cierre",
+      label: cierreOpen[row.llave] ? "Ocultar cierre" : "Marcar pagada por Cartera",
+      onClick: () => toggleCierrePanel(row),
+      className: "text-gray-700",
+      title: "La cuota no tiene pago identificado — declararla pagada por cartera",
+    });
+    if (d.puedeDescartar || d.puedeDescartarCerradaPorCartera) acciones.push({
+      key: "descartar",
+      label: descartarOpen[row.llave] ? "Ocultar descartar" : "Descartar pago",
+      onClick: () => toggleDescartarPanel(row),
+      className: "text-red-700",
+      title: d.puedeDescartarCerradaPorCartera
+        ? "Esta cuota está cerrada por Cartera y además tiene un pago aplicado: suéltalo acá; vuelve como saldo a favor del documento"
+        : "Suelta un pago de esta cuota; vuelve como saldo a favor del documento",
+    });
+    // Va DEBAJO de "Descartar pago" y no lo reemplaza: a veces solo hay que
+    // descartar, y un botón que además cierre sería un problema (decisión
+    // explícita del usuario).
+    if (d.puedeDescartar && !d.cerrada && !d.yaCobrada) acciones.push({
+      key: "descartar-cerrar",
+      label: descartarCerrarOpen[row.llave] ? "Ocultar descartar y cerrar" : "Descartar y marcar pagada por Cartera",
+      onClick: () => toggleDescartarCerrarPanel(row),
+      className: "text-slate-700",
+      title: "Suelta los pagos de la cuota y la cierra por Cartera, de un paso",
+    });
+    if (necesitaUltimaCuota(row)) acciones.push({
+      key: "ultima",
+      label: ultimaCuotaLlaves.has(row.llave) ? "✓ Última cuota" : "Es la última cuota",
+      onClick: () => handleToggleUltimaCuota(row),
+      className: "text-indigo-700",
+      title: "Marca que esta es la última cuota de la inscripción (modo B): un sobrante pasa a excedente final, un faltante se condona hasta $50k",
+    });
+    if (d.cierrePorCartera || d.cierreConPago) acciones.push({
+      key: "reabrir",
+      label: "Reabrir",
+      onClick: () => d.cierrePorCartera ? handleReabrirCartera(row) : handleReabrirCuota(row),
+      className: "text-slate-700",
+      title: d.cierrePorCartera
+        ? "Deshace el cierre manual — la cuota vuelve a pendiente en el próximo cruce"
+        : "Deshace el cierre y pone el Día del Cruce de hoy. No cambia el pago ni los datos de la cuota.",
+    });
+    return acciones;
+  };
+
+  // La cuota abierta en el cajón, leída de `data` para que se actualice sola con
+  // cada recarga. Si dejó de estar en pantalla, `fetchData` ya cerró el cajón.
+  const filaCajon = cajonLlave ? data.find((r) => r.llave === cajonLlave) ?? null : null;
+
+  // 🔴 La cuota que se PINTA no es la misma que decide si el cajón está abierto.
+  // Al cerrarlo, el ancho tarda 300 ms en llegar a cero; si el contenido se
+  // desmontara en el primer fotograma, se vería una franja blanca encogiéndose en
+  // vez del cajón yéndose. Así que se sigue pintando la última cuota mientras dura
+  // la animación. La escritura en el ref es el patrón de "último valor": no cambia
+  // nada del render, solo lo recuerda.
+  const ultimaLlaveRef = useRef<string | null>(null);
+  if (cajonLlave !== null) ultimaLlaveRef.current = cajonLlave;
+  const llavePintada = cajonLlave ?? ultimaLlaveRef.current;
+  const filaPintada  = llavePintada ? data.find((r) => r.llave === llavePintada) ?? null : null;
+
+  // Abre el cajón en una cuota —o lo cierra si ya estaba en esa— y, de paso, pide
+  // los pagos del documento. 🔴 La carga va acá y no en un efecto: apretar es lo
+  // que la dispara, y un efecto obligaría a la IIFE async de siempre
+  // (`react-hooks/set-state-in-effect`) para hacer exactamente lo mismo.
+  // ⚠️ Apretar el botón de OTRA fila con el cajón abierto lo cambia de cuota sin
+  // cerrarlo: es lo que hace que comparar dos cuotas de la misma persona sea un
+  // clic, que es el trabajo del día.
+  const abrirCajon = async (row: CarteraPreventivaRow) => {
+    const yaEstaba = cajonLlave === row.llave;
+    setCajonLlave(yaEstaba ? null : row.llave);
+    if (yaEstaba) return;
+    const doc = row.cruce_access;
+    if (doc && !asociarData[doc]) await fetchAsociarData(doc);
+  };
+
   return (
-    <div className="p-5 pb-8 space-y-4">
-      {reprocesoBadge}
-      <div className={`${PANEL} animate-slide-down px-6 py-4 flex items-center justify-between flex-wrap gap-3`}>
-        <h1 className="text-lg font-semibold text-gray-900">Cartera Preventiva</h1>
-        <div className="flex items-center gap-2 flex-wrap">
-          <BuscarArchivosButton onDone={async () => { await fetchData(page); return fetchStagingStatus(); }} />
-          <button
-            onClick={() => setAgregarOpen(true)}
-            className="flex items-center gap-1.5 border border-black/10 text-brand-700 text-sm px-3.5 py-1.5 rounded-full hover:bg-brand-50 active:scale-95 transition-all duration-200 ease-(--ease-spring)"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Agregar cuota
-          </button>
-          <button
-            onClick={() => { setCerrarDiaOpen(true); setCerrarDiaMessage(""); setCerrarDiaError(""); }}
-            disabled={cerrandoDia}
-            title={`Pasa valor_pago a pago en las cuotas cruzadas ${cierreDiaLabel} que coincidan con los filtros de la vista`}
-            className="flex items-center gap-1.5 bg-slate-700 text-white text-sm px-3.5 py-1.5 rounded-full shadow-sm hover:bg-slate-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
-            {cerrandoDia ? "Cerrando..." : "Cerrar Cartera"}
-          </button>
-        </div>
-      </div>
-
-      {(cerrarDiaMessage || cerrarDiaError) && (
-        <div className={`text-sm rounded-xl px-3.5 py-2 border ${cerrarDiaError ? "text-red-600 bg-red-50 border-red-200/80" : "text-green-700 bg-green-50 border-green-200/80"}`}>
-          {cerrarDiaError || cerrarDiaMessage}
-        </div>
-      )}
-
-      {/* §2.2: confirmación obligatoria, sin deshacer. */}
-      {cerrarDiaOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4" onClick={() => !cerrandoDia && setCerrarDiaOpen(false)}>
-          <div className={`${PANEL} animate-pop-in max-w-md w-full p-6 space-y-3`} onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-base font-semibold text-gray-900">
-              ¿Estás seguro de cerrar la cartera cruzada {cierreDiaLabel}?
-            </h2>
-            <p className="text-sm text-gray-600">
-              Se marcarán como cobradas las cuotas cruzadas <span className="font-medium">{cierreDiaLabel}</span> que
-              coincidan con los filtros puestos en la vista (<span className="font-medium">{total.toLocaleString("es-CO")}</span> en
-              pantalla): el valor identificado pasa a la columna <span className="font-medium">Pago</span> y
-              lo que falte queda a la vista en <span className="font-medium">Valor a Cobrar</span>.
-            </p>
-            <p className="text-xs text-gray-500">
-              No se puede deshacer desde esta pantalla. Las cuotas ya cerradas y las que no tienen
-              pago identificado se saltan solas —así que el número final puede ser menor, y darle
-              dos veces no hace daño.
-            </p>
-            <div className="flex justify-end gap-2 pt-1">
-              <button
-                onClick={() => setCerrarDiaOpen(false)}
-                disabled={cerrandoDia}
-                className="text-sm px-3.5 py-1.5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleCerrarDia}
-                disabled={cerrandoDia}
-                className="text-sm px-3.5 py-1.5 rounded-full bg-slate-700 text-white hover:bg-slate-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
-              >
-                {cerrandoDia ? "Cerrando..." : "Confirmar"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {agregarMessage && (
-        <div className="text-sm text-green-700 bg-green-50 border border-green-200/80 rounded-xl px-3.5 py-2">
-          {agregarMessage}
-        </div>
-      )}
-
-      {/* §1: crear a mano una cuota que no vino en el Excel. */}
-      {agregarOpen && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 py-10 overflow-y-auto" onClick={() => !agregarGuardando && setAgregarOpen(false)}>
-          <div className={`${PANEL} animate-pop-in max-w-lg w-full p-6 space-y-3`} onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-base font-semibold text-gray-900">Agregar cuota</h2>
-            <p className="text-xs text-gray-500">
-              Para cuotas que deberían estar en la cartera y no vinieron en el Excel. El pago de esa
-              persona no se pierde: en cuanto exista la cuota, el reproceso lo aplica en cuanto termina.
-            </p>
-
-            <div className="space-y-2.5">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Documento *</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={agregarForm.cruce_access}
-                    onChange={(e) => setAgregarForm((p) => ({ ...p, cruce_access: e.target.value }))}
-                    onBlur={(e) => buscarInscripciones(e.target.value)}
-                    placeholder="Documento del deudor"
-                    className={`flex-1 ${INPUT}`}
-                  />
-                  <button
-                    onClick={() => buscarInscripciones(agregarForm.cruce_access)}
-                    disabled={agregarBuscando || !agregarForm.cruce_access.trim()}
-                    className="text-sm px-3 py-1.5 rounded-xl border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 whitespace-nowrap"
-                  >
-                    {agregarBuscando ? "Buscando..." : "Buscar"}
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Inscripción (INCP) *</label>
-                {agregarInscripciones.length > 0 ? (
-                  <select
-                    value={agregarForm.inscrip}
-                    onChange={(e) => setAgregarForm((p) => ({ ...p, inscrip: e.target.value }))}
-                    className={`w-full ${INPUT}`}
-                  >
-                    <option value="" className="text-gray-900">Elige una inscripción...</option>
-                    {agregarInscripciones.map((i) => (
-                      <option key={i} value={i} className="text-gray-900">
-                        {i}{agregarEnCartera.includes(i) ? " — ya está en cartera" : " — solo en el Excel de inscripciones"}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    value={agregarForm.inscrip}
-                    onChange={(e) => setAgregarForm((p) => ({ ...p, inscrip: e.target.value }))}
-                    placeholder="Busca el documento para elegir, o escríbela"
-                    className={`w-full ${INPUT}`}
-                  />
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Fecha de vencimiento *</label>
-                  <input
-                    type="date"
-                    value={agregarForm.fecha_vencimiento}
-                    onChange={(e) => setAgregarForm((p) => ({ ...p, fecha_vencimiento: e.target.value }))}
-                    className={`w-full ${INPUT}`}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Valor de la cuota *</label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={agregarForm.valor_cuota}
-                    onChange={(e) => setAgregarForm((p) => ({ ...p, valor_cuota: e.target.value }))}
-                    onBlur={(e) => setAgregarForm((p) => ({ ...p, valor_cuota: formatMonto(e.target.value) }))}
-                    className={`w-full ${INPUT}`}
-                  />
-                </div>
-              </div>
-
-              {agregarForm.fecha_vencimiento && (
-                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200/80 rounded-lg px-2 py-1.5">
-                  La fecha de vencimiento define el orden de cobro: una fecha vieja hace que esta
-                  cuota se cobre <span className="font-medium">antes</span> que las que ya estaban pendientes.
-                </p>
-              )}
-
-              <div className="grid grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Cliente</label>
-                  <input type="text" value={agregarForm.cliente}
-                    onChange={(e) => setAgregarForm((p) => ({ ...p, cliente: e.target.value }))}
-                    className={`w-full ${INPUT}`} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Programa</label>
-                  <input type="text" value={agregarForm.programa}
-                    onChange={(e) => setAgregarForm((p) => ({ ...p, programa: e.target.value }))}
-                    className={`w-full ${INPUT}`} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Correo</label>
-                  <input type="text" value={agregarForm.correo}
-                    onChange={(e) => setAgregarForm((p) => ({ ...p, correo: e.target.value }))}
-                    className={`w-full ${INPUT}`} />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Moneda</label>
-                    <input type="text" value={agregarForm.moneda}
-                      onChange={(e) => setAgregarForm((p) => ({ ...p, moneda: e.target.value }))}
-                      className={`w-full ${INPUT}`} />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Sist. Fin.</label>
-                    <input type="text" value={agregarForm.sistema_financiero}
-                      onChange={(e) => setAgregarForm((p) => ({ ...p, sistema_financiero: e.target.value }))}
-                      className={`w-full ${INPUT}`} />
-                  </div>
-                </div>
-              </div>
-
-              {agregarInscripciones.length > 1 && (
-                <p className="text-[11px] text-gray-500">
-                  Ojo: si esta persona queda con dos inscripciones debiendo, el sistema deja de
-                  aplicarle los pagos automáticamente y pasan a asociación manual. Es a propósito,
-                  para que la plata no caiga en la inscripción equivocada.
-                </p>
-              )}
-              <p className="text-[11px] text-gray-400">
-                Al hacer &quot;Cargar Cartera&quot; esta cuota no se recrea: se archiva con la versión, como
-                cualquier otra. Si sigue faltando, se vuelve a crear.
-              </p>
-            </div>
-
-            {agregarError && <p className="text-xs text-red-600">{agregarError}</p>}
-
-            <div className="flex justify-end gap-2 pt-1">
-              <button
-                onClick={() => setAgregarOpen(false)}
-                disabled={agregarGuardando}
-                className="text-sm px-3.5 py-1.5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleAgregarCuota}
-                disabled={
-                  agregarGuardando ||
-                  !agregarForm.cruce_access.trim() ||
-                  !agregarForm.inscrip.trim() ||
-                  !agregarForm.fecha_vencimiento ||
-                  !(parseMonto(agregarForm.valor_cuota) > 0)
-                }
-                className="text-sm px-3.5 py-1.5 rounded-full bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
-              >
-                {agregarGuardando ? "Creando..." : "Crear cuota"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {stagingCount > 0 && (
-        <div className="animate-slide-down bg-amber-50 border border-amber-200/80 rounded-2xl px-6 py-3.5 flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <p className="text-sm font-medium text-amber-900">
-              Hay una cartera nueva pendiente de cargar ({stagingCount.toLocaleString("es-CO")} cuotas)
-            </p>
-            <p className="text-xs text-amber-700 mt-0.5">Al activarla, la versión actual se archiva. Es irreversible desde esta pantalla — verifica antes de confirmar.</p>
-            {activarMessage && <p className="text-xs text-green-700 mt-1">{activarMessage}</p>}
-            {activarError && <p className="text-xs text-red-600 mt-1">{activarError}</p>}
-          </div>
-          <button
-            onClick={handleActivarCartera}
-            disabled={activando}
-            className="text-sm px-3.5 py-1.5 rounded-full bg-amber-600 text-white hover:bg-amber-700 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 whitespace-nowrap"
-          >
-            {activando ? "Activando..." : "Cargar Cartera"}
-          </button>
-        </div>
-      )}
-
-      <div className={`${PANEL} animate-fade-in [animation-delay:60ms] px-6 py-4 space-y-3`}>
-        <div className="flex gap-3 flex-wrap items-center">
-          <div className="relative w-80">
-            <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
-            </svg>
-            <input
-              type="text"
-              placeholder="Buscar por documento, cliente, INCP o VAL..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className={`w-full ${INPUT} rounded-full pl-9 pr-3.5`}
-            />
-          </div>
-          <select
-            value={estado}
-            onChange={(e) => { setEstado(e.target.value); setPage(1); }}
-            className={INPUT}
-          >
-            <option value="todas" className="text-gray-900">Todas</option>
-            <option value="pendiente" className="text-gray-900">Pendiente</option>
-            <option value="resuelta" className="text-gray-900">Resuelta</option>
-            <option value="cerrada" className="text-gray-900">Cerradas</option>
-          </select>
-          <select
-            value={medioPago}
-            onChange={(e) => {
-              setMedioPago(e.target.value);
-              if (e.target.value !== "WOMPI%") setWompiTipo("");
-              setPage(1);
-            }}
-            className={INPUT}
-          >
-            <option value="" className="text-gray-900">Todos los medios de pago</option>
-            {medios.map((m) => (
-              <option key={m.value} value={m.value} className="text-gray-900">{m.label}</option>
-            ))}
-          </select>
-          <select
-            value={wompiTipo}
-            onChange={(e) => { setWompiTipo(e.target.value); setPage(1); }}
-            disabled={medioPago !== "WOMPI%"}
-            className={`${INPUT} disabled:opacity-40 disabled:cursor-not-allowed`}
-          >
-            <option value="" className="text-gray-900">Todos (Wompi)</option>
-            <option value="automatico" className="text-gray-900">Automáticos</option>
-            <option value="manual" className="text-gray-900">Manuales</option>
-          </select>
-          {/* Diferencia: el umbral de "le falta plata" depende de la moneda de la
-              cuota (ver lib/carteraDiferencia.ts). Cada cuota que califica baja con
-              sus líneas derivadas pegadas debajo, aunque esas no califiquen solas. */}
-          <select
-            value={diferencia}
-            onChange={(e) => { setDiferencia(e.target.value); setPage(1); }}
-            className={INPUT}
-            title="Le falta plata: deuda de $50.000 o más (15 USD o más en cuotas en dólares). Le sobra plata: diferencia de $1 en adelante."
-          >
-            <option value="" className="text-gray-900">Cualquier diferencia</option>
-            <option value="falta" className="text-gray-900">Le falta plata</option>
-            <option value="sobra" className="text-gray-900">Le sobra plata</option>
-          </select>
-        </div>
-
-        <div className="flex gap-6 flex-wrap text-sm text-gray-600 items-center">
-          <div className="flex items-center gap-2">
-            <span className="font-medium">Fecha Vencimiento</span>
-            <input type="date" value={vencFrom} onChange={(e) => { setVencFrom(e.target.value); setPage(1); }}
-              className={`${INPUT} py-1`} />
-            <span>→</span>
-            <input type="date" value={vencTo} onChange={(e) => { setVencTo(e.target.value); setPage(1); }}
-              className={`${INPUT} py-1`} />
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="font-medium">Fecha Pago</span>
-            <input type="date" value={payFrom} onChange={(e) => { setPayFrom(e.target.value); setPage(1); }}
-              className={`${INPUT} py-1`} />
-            <span>→</span>
-            <input type="date" value={payTo} onChange={(e) => { setPayTo(e.target.value); setPage(1); }}
-              className={`${INPUT} py-1`} />
-          </div>
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={pagoParcial}
-              onChange={(e) => { setPagoParcial(e.target.checked); setPage(1); }}
-              className="rounded border-gray-300 text-brand-600 focus:ring-brand-500/50"
-            />
-            <span className="font-medium">Solo pago parcial</span>
-          </label>
-          <div className="flex items-center gap-2">
-            <span className="font-medium">Día del Cruce</span>
-            <input type="date" value={cruceFrom} onChange={(e) => { setCruceFrom(e.target.value); setPage(1); }}
-              className={`${INPUT} py-1`} />
-            <span>→</span>
-            <input type="date" value={cruceTo} onChange={(e) => { setCruceTo(e.target.value); setPage(1); }}
-              className={`${INPUT} py-1`} />
-          </div>
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={conNotificacion}
-              onChange={(e) => { setConNotificacion(e.target.checked); setPage(1); }}
-              className="rounded border-gray-300 text-brand-600 focus:ring-brand-500/50"
-            />
-            <span className="font-medium">Con notificación de pago de más</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={multiCuota}
-              onChange={(e) => { setMultiCuota(e.target.checked); setPage(1); }}
-              className="rounded border-gray-300 text-brand-600 focus:ring-brand-500/50"
-            />
-            <span className="font-medium">Inscripciones con varias cuotas</span>
-          </label>
-          {/* El pipeline avisa en `notificacion` cuando dejó una cuota corta por menos
-              del umbral y por eso NO aplicó solo el pago siguiente. Es trabajo del día:
-              nadie las encuentra buscando por documento, porque quien revisa no sabe
-              que existen. Va aparte del desplegable de estado a propósito — esas 3
-              opciones parten la cartera sin solapes. */}
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={pagoSinAplicar}
-              onChange={(e) => { setPagoSinAplicar(e.target.checked); setPage(1); }}
-              className="rounded border-gray-300 text-brand-600 focus:ring-brand-500/50"
-            />
-            <span className="font-medium">Con pago sin aplicar</span>
-          </label>
-          {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || medioPago || payFrom || payTo || cruceFrom || cruceTo || conNotificacion || multiCuota || pagoSinAplicar || diferencia || wompiTipo) && (
+    // 🔴 El cajón es una COLUMNA de este flex, igual que la barra lateral del
+    // shell (`shrink-0 sticky top-0 h-screen`): EMPUJA la tabla en vez de taparla.
+    // El borde derecho es justo donde vive la columna Acciones, así que un panel
+    // encima cubriría el botón de todas las demás filas y no se podría cambiar de
+    // cuota sin cerrarlo — que es lo que este cajón existe para permitir.
+    <div className="flex min-h-screen">
+      <div className="flex-1 min-w-0 p-5 pb-8 space-y-4">
+        {reprocesoBadge}
+        <div className={`${PANEL} animate-slide-down px-6 py-4 flex items-center justify-between flex-wrap gap-3`}>
+          <h1 className="text-lg font-semibold text-gray-900">Cartera Preventiva</h1>
+          <div className="flex items-center gap-2 flex-wrap">
+            <BuscarArchivosButton onDone={async () => { await fetchData(page); return fetchStagingStatus(); }} />
             <button
-              onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setMedioPago(""); setPayFrom(""); setPayTo(""); setCruceFrom(""); setCruceTo(""); setConNotificacion(false); setMultiCuota(false); setPagoSinAplicar(false); setDiferencia(""); setWompiTipo(""); setPage(1); }}
-              className="text-red-500 hover:text-red-700 text-xs underline"
+              onClick={() => setAgregarOpen(true)}
+              className="flex items-center gap-1.5 border border-black/10 text-brand-700 text-sm px-3.5 py-1.5 rounded-full hover:bg-brand-50 active:scale-95 transition-all duration-200 ease-(--ease-spring)"
             >
-              Limpiar filtros
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Agregar cuota
             </button>
-          )}
+            <button
+              onClick={() => { setCerrarDiaOpen(true); setCerrarDiaMessage(""); setCerrarDiaError(""); }}
+              disabled={cerrandoDia}
+              title={`Pasa valor_pago a pago en las cuotas cruzadas ${cierreDiaLabel} que coincidan con los filtros de la vista`}
+              className="flex items-center gap-1.5 bg-slate-700 text-white text-sm px-3.5 py-1.5 rounded-full shadow-sm hover:bg-slate-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              {cerrandoDia ? "Cerrando..." : "Cerrar Cartera"}
+            </button>
+          </div>
         </div>
-      </div>
 
-      <div className="px-1 flex items-center justify-between gap-3">
-        <span className="text-sm text-gray-500">
-          {loading
-            ? "Cargando..."
-            : diferencia && renglones !== null
-              // Con el filtro puesto se pagina por CUOTA, no por renglón: una cuota
-              // arrastra sus líneas derivadas, así que los dos números no coinciden.
-              ? `${total.toLocaleString("es-CO")} cuotas (${renglones.toLocaleString("es-CO")} renglones)`
-              : `${total.toLocaleString("es-CO")} registros encontrados`}
-        </span>
+        {(cerrarDiaMessage || cerrarDiaError) && (
+          <div className={`text-sm rounded-xl px-3.5 py-2 border ${cerrarDiaError ? "text-red-600 bg-red-50 border-red-200/80" : "text-green-700 bg-green-50 border-green-200/80"}`}>
+            {cerrarDiaError || cerrarDiaMessage}
+          </div>
+        )}
 
-        <div ref={dropdownRef} className="relative">
-          <button
-            onClick={() => setDropdownOpen((o) => !o)}
-            disabled={loading || total === 0}
-            className="flex items-center gap-1.5 bg-brand-600 text-white text-sm px-3.5 py-1.5 rounded-full shadow-sm hover:bg-brand-700 hover:brightness-105 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            Descargar
-            <svg className={`w-3 h-3 ml-0.5 transition-transform duration-200 ease-(--ease-spring) ${dropdownOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-          {dropdownOpen && (
-            <div className="animate-pop-in origin-top-right absolute right-0 mt-1.5 w-44 bg-white border border-black/[0.06] rounded-xl shadow-[0_8px_24px_-8px_rgba(0,0,0,0.2)] z-50 overflow-hidden py-1">
-              <button
-                onClick={downloadExcel}
-                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-100"
-              >
-                Descargar Excel
-              </button>
-              <button
-                onClick={downloadCSV}
-                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-100"
-              >
-                Descargar CSV
-              </button>
+        {/* §2.2: confirmación obligatoria, sin deshacer. */}
+        {cerrarDiaOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4" onClick={() => !cerrandoDia && setCerrarDiaOpen(false)}>
+            <div className={`${PANEL} animate-pop-in max-w-md w-full p-6 space-y-3`} onClick={(e) => e.stopPropagation()}>
+              <h2 className="text-base font-semibold text-gray-900">
+                ¿Estás seguro de cerrar la cartera cruzada {cierreDiaLabel}?
+              </h2>
+              <p className="text-sm text-gray-600">
+                Se marcarán como cobradas las cuotas cruzadas <span className="font-medium">{cierreDiaLabel}</span> que
+                coincidan con los filtros puestos en la vista (<span className="font-medium">{total.toLocaleString("es-CO")}</span> en
+                pantalla): el valor identificado pasa a la columna <span className="font-medium">Pago</span> y
+                lo que falte queda a la vista en <span className="font-medium">Valor a Cobrar</span>.
+              </p>
+              <p className="text-xs text-gray-500">
+                No se puede deshacer desde esta pantalla. Las cuotas ya cerradas y las que no tienen
+                pago identificado se saltan solas —así que el número final puede ser menor, y darle
+                dos veces no hace daño.
+              </p>
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  onClick={() => setCerrarDiaOpen(false)}
+                  disabled={cerrandoDia}
+                  className="text-sm px-3.5 py-1.5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleCerrarDia}
+                  disabled={cerrandoDia}
+                  className="text-sm px-3.5 py-1.5 rounded-full bg-slate-700 text-white hover:bg-slate-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                >
+                  {cerrandoDia ? "Cerrando..." : "Confirmar"}
+                </button>
+              </div>
             </div>
-          )}
-        </div>
-      </div>
+          </div>
+        )}
 
-      {fetchError && (
-        <div className="text-sm text-red-600 bg-red-50 border border-red-200/80 rounded-xl px-3.5 py-2">
-          {fetchError}
-        </div>
-      )}
+        {agregarMessage && (
+          <div className="text-sm text-green-700 bg-green-50 border border-green-200/80 rounded-xl px-3.5 py-2">
+            {agregarMessage}
+          </div>
+        )}
 
-      <div className={`${PANEL} animate-fade-in [animation-delay:100ms] overflow-hidden`}>
-        <div ref={tableContainerRef} className="overflow-auto max-h-[65vh]">
-          <table className="w-full text-sm border-collapse">
-            <thead className="sticky top-0 z-10">
-              <tr className="bg-gray-50 text-gray-500 text-left border-b border-black/[0.06]">
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Llave</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Sistema Financiero</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Inscrip.</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Cliente</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Moneda</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Fecha Vencimiento</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Valor Cuota</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Pago</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Valor a Cobrar</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Programa</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Fecha Pago</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Medio de Pago</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Valor Pago</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 1</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 2</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Correo Electrónico</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Notificación</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Diferencia</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Documento</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Estado</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">Acciones</th>
-              </tr>
-            </thead>
-            <tbody key={page} className="divide-y divide-gray-100 animate-fade-in">
-              {loading && data.length === 0 ? (
-                Array.from({ length: 8 }).map((_, i) => (
-                  <tr key={i}>
-                    {Array.from({ length: 21 }).map((_, j) => (
-                      <td key={j} className="px-4 py-3">
-                        <div className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * j * 7) % 40}%` }} />
-                      </td>
-                    ))}
-                  </tr>
-                ))
-              ) : data.length === 0 ? (
-                <tr>
-                  <td colSpan={21} className="text-center py-12 text-gray-400">No hay registros</td>
+        {/* §1: crear a mano una cuota que no vino en el Excel. */}
+        {agregarOpen && (
+          <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 py-10 overflow-y-auto" onClick={() => !agregarGuardando && setAgregarOpen(false)}>
+            <div className={`${PANEL} animate-pop-in max-w-lg w-full p-6 space-y-3`} onClick={(e) => e.stopPropagation()}>
+              <h2 className="text-base font-semibold text-gray-900">Agregar cuota</h2>
+              <p className="text-xs text-gray-500">
+                Para cuotas que deberían estar en la cartera y no vinieron en el Excel. El pago de esa
+                persona no se pierde: en cuanto exista la cuota, el reproceso lo aplica en cuanto termina.
+              </p>
+
+              <div className="space-y-2.5">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Documento *</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={agregarForm.cruce_access}
+                      onChange={(e) => setAgregarForm((p) => ({ ...p, cruce_access: e.target.value }))}
+                      onBlur={(e) => buscarInscripciones(e.target.value)}
+                      placeholder="Documento del deudor"
+                      className={`flex-1 ${INPUT}`}
+                    />
+                    <button
+                      onClick={() => buscarInscripciones(agregarForm.cruce_access)}
+                      disabled={agregarBuscando || !agregarForm.cruce_access.trim()}
+                      className="text-sm px-3 py-1.5 rounded-xl border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 whitespace-nowrap"
+                    >
+                      {agregarBuscando ? "Buscando..." : "Buscar"}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Inscripción (INCP) *</label>
+                  {agregarInscripciones.length > 0 ? (
+                    <select
+                      value={agregarForm.inscrip}
+                      onChange={(e) => setAgregarForm((p) => ({ ...p, inscrip: e.target.value }))}
+                      className={`w-full ${INPUT}`}
+                    >
+                      <option value="" className="text-gray-900">Elige una inscripción...</option>
+                      {agregarInscripciones.map((i) => (
+                        <option key={i} value={i} className="text-gray-900">
+                          {i}{agregarEnCartera.includes(i) ? " — ya está en cartera" : " — solo en el Excel de inscripciones"}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={agregarForm.inscrip}
+                      onChange={(e) => setAgregarForm((p) => ({ ...p, inscrip: e.target.value }))}
+                      placeholder="Busca el documento para elegir, o escríbela"
+                      className={`w-full ${INPUT}`}
+                    />
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Fecha de vencimiento *</label>
+                    <input
+                      type="date"
+                      value={agregarForm.fecha_vencimiento}
+                      onChange={(e) => setAgregarForm((p) => ({ ...p, fecha_vencimiento: e.target.value }))}
+                      className={`w-full ${INPUT}`}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Valor de la cuota *</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={agregarForm.valor_cuota}
+                      onChange={(e) => setAgregarForm((p) => ({ ...p, valor_cuota: e.target.value }))}
+                      onBlur={(e) => setAgregarForm((p) => ({ ...p, valor_cuota: formatMonto(e.target.value) }))}
+                      className={`w-full ${INPUT}`}
+                    />
+                  </div>
+                </div>
+
+                {agregarForm.fecha_vencimiento && (
+                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200/80 rounded-lg px-2 py-1.5">
+                    La fecha de vencimiento define el orden de cobro: una fecha vieja hace que esta
+                    cuota se cobre <span className="font-medium">antes</span> que las que ya estaban pendientes.
+                  </p>
+                )}
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Cliente</label>
+                    <input type="text" value={agregarForm.cliente}
+                      onChange={(e) => setAgregarForm((p) => ({ ...p, cliente: e.target.value }))}
+                      className={`w-full ${INPUT}`} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Programa</label>
+                    <input type="text" value={agregarForm.programa}
+                      onChange={(e) => setAgregarForm((p) => ({ ...p, programa: e.target.value }))}
+                      className={`w-full ${INPUT}`} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Correo</label>
+                    <input type="text" value={agregarForm.correo}
+                      onChange={(e) => setAgregarForm((p) => ({ ...p, correo: e.target.value }))}
+                      className={`w-full ${INPUT}`} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Moneda</label>
+                      <input type="text" value={agregarForm.moneda}
+                        onChange={(e) => setAgregarForm((p) => ({ ...p, moneda: e.target.value }))}
+                        className={`w-full ${INPUT}`} />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Sist. Fin.</label>
+                      <input type="text" value={agregarForm.sistema_financiero}
+                        onChange={(e) => setAgregarForm((p) => ({ ...p, sistema_financiero: e.target.value }))}
+                        className={`w-full ${INPUT}`} />
+                    </div>
+                  </div>
+                </div>
+
+                {agregarInscripciones.length > 1 && (
+                  <p className="text-[11px] text-gray-500">
+                    Ojo: si esta persona queda con dos inscripciones debiendo, el sistema deja de
+                    aplicarle los pagos automáticamente y pasan a asociación manual. Es a propósito,
+                    para que la plata no caiga en la inscripción equivocada.
+                  </p>
+                )}
+                <p className="text-[11px] text-gray-400">
+                  Al hacer &quot;Cargar Cartera&quot; esta cuota no se recrea: se archiva con la versión, como
+                  cualquier otra. Si sigue faltando, se vuelve a crear.
+                </p>
+              </div>
+
+              {agregarError && <p className="text-xs text-red-600">{agregarError}</p>}
+
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  onClick={() => setAgregarOpen(false)}
+                  disabled={agregarGuardando}
+                  className="text-sm px-3.5 py-1.5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleAgregarCuota}
+                  disabled={
+                    agregarGuardando ||
+                    !agregarForm.cruce_access.trim() ||
+                    !agregarForm.inscrip.trim() ||
+                    !agregarForm.fecha_vencimiento ||
+                    !(parseMonto(agregarForm.valor_cuota) > 0)
+                  }
+                  className="text-sm px-3.5 py-1.5 rounded-full bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                >
+                  {agregarGuardando ? "Creando..." : "Crear cuota"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {stagingCount > 0 && (
+          <div className="animate-slide-down bg-amber-50 border border-amber-200/80 rounded-2xl px-6 py-3.5 flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <p className="text-sm font-medium text-amber-900">
+                Hay una cartera nueva pendiente de cargar ({stagingCount.toLocaleString("es-CO")} cuotas)
+              </p>
+              <p className="text-xs text-amber-700 mt-0.5">Al activarla, la versión actual se archiva. Es irreversible desde esta pantalla — verifica antes de confirmar.</p>
+              {activarMessage && <p className="text-xs text-green-700 mt-1">{activarMessage}</p>}
+              {activarError && <p className="text-xs text-red-600 mt-1">{activarError}</p>}
+            </div>
+            <button
+              onClick={handleActivarCartera}
+              disabled={activando}
+              className="text-sm px-3.5 py-1.5 rounded-full bg-amber-600 text-white hover:bg-amber-700 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 whitespace-nowrap"
+            >
+              {activando ? "Activando..." : "Cargar Cartera"}
+            </button>
+          </div>
+        )}
+
+        <div className={`${PANEL} animate-fade-in [animation-delay:60ms] px-6 py-4 space-y-3`}>
+          <div className="flex gap-3 flex-wrap items-center">
+            <div className="relative w-80">
+              <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+              </svg>
+              <input
+                type="text"
+                placeholder="Buscar por documento, cliente, INCP o VAL..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className={`w-full ${INPUT} rounded-full pl-9 pr-3.5`}
+              />
+            </div>
+            <select
+              value={estado}
+              onChange={(e) => { setEstado(e.target.value); setPage(1); }}
+              className={INPUT}
+            >
+              <option value="todas" className="text-gray-900">Todas</option>
+              <option value="pendiente" className="text-gray-900">Pendiente</option>
+              <option value="resuelta" className="text-gray-900">Resuelta</option>
+              <option value="cerrada" className="text-gray-900">Cerradas</option>
+            </select>
+            <select
+              value={medioPago}
+              onChange={(e) => {
+                setMedioPago(e.target.value);
+                if (e.target.value !== "WOMPI%") setWompiTipo("");
+                setPage(1);
+              }}
+              className={INPUT}
+            >
+              <option value="" className="text-gray-900">Todos los medios de pago</option>
+              {medios.map((m) => (
+                <option key={m.value} value={m.value} className="text-gray-900">{m.label}</option>
+              ))}
+            </select>
+            <select
+              value={wompiTipo}
+              onChange={(e) => { setWompiTipo(e.target.value); setPage(1); }}
+              disabled={medioPago !== "WOMPI%"}
+              className={`${INPUT} disabled:opacity-40 disabled:cursor-not-allowed`}
+            >
+              <option value="" className="text-gray-900">Todos (Wompi)</option>
+              <option value="automatico" className="text-gray-900">Automáticos</option>
+              <option value="manual" className="text-gray-900">Manuales</option>
+            </select>
+            {/* Diferencia: el umbral de "le falta plata" depende de la moneda de la
+                cuota (ver lib/carteraDiferencia.ts). Cada cuota que califica baja con
+                sus líneas derivadas pegadas debajo, aunque esas no califiquen solas. */}
+            <select
+              value={diferencia}
+              onChange={(e) => { setDiferencia(e.target.value); setPage(1); }}
+              className={INPUT}
+              title="Le falta plata: deuda de $50.000 o más (15 USD o más en cuotas en dólares). Le sobra plata: diferencia de $1 en adelante."
+            >
+              <option value="" className="text-gray-900">Cualquier diferencia</option>
+              <option value="falta" className="text-gray-900">Le falta plata</option>
+              <option value="sobra" className="text-gray-900">Le sobra plata</option>
+            </select>
+          </div>
+
+          <div className="flex gap-6 flex-wrap text-sm text-gray-600 items-center">
+            <div className="flex items-center gap-2">
+              <span className="font-medium">Fecha Vencimiento</span>
+              <input type="date" value={vencFrom} onChange={(e) => { setVencFrom(e.target.value); setPage(1); }}
+                className={`${INPUT} py-1`} />
+              <span>→</span>
+              <input type="date" value={vencTo} onChange={(e) => { setVencTo(e.target.value); setPage(1); }}
+                className={`${INPUT} py-1`} />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="font-medium">Fecha Pago</span>
+              <input type="date" value={payFrom} onChange={(e) => { setPayFrom(e.target.value); setPage(1); }}
+                className={`${INPUT} py-1`} />
+              <span>→</span>
+              <input type="date" value={payTo} onChange={(e) => { setPayTo(e.target.value); setPage(1); }}
+                className={`${INPUT} py-1`} />
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={pagoParcial}
+                onChange={(e) => { setPagoParcial(e.target.checked); setPage(1); }}
+                className="rounded border-gray-300 text-brand-600 focus:ring-brand-500/50"
+              />
+              <span className="font-medium">Solo pago parcial</span>
+            </label>
+            <div className="flex items-center gap-2">
+              <span className="font-medium">Día del Cruce</span>
+              <input type="date" value={cruceFrom} onChange={(e) => { setCruceFrom(e.target.value); setPage(1); }}
+                className={`${INPUT} py-1`} />
+              <span>→</span>
+              <input type="date" value={cruceTo} onChange={(e) => { setCruceTo(e.target.value); setPage(1); }}
+                className={`${INPUT} py-1`} />
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={conNotificacion}
+                onChange={(e) => { setConNotificacion(e.target.checked); setPage(1); }}
+                className="rounded border-gray-300 text-brand-600 focus:ring-brand-500/50"
+              />
+              <span className="font-medium">Con notificación de pago de más</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={multiCuota}
+                onChange={(e) => { setMultiCuota(e.target.checked); setPage(1); }}
+                className="rounded border-gray-300 text-brand-600 focus:ring-brand-500/50"
+              />
+              <span className="font-medium">Inscripciones con varias cuotas</span>
+            </label>
+            {/* El pipeline avisa en `notificacion` cuando dejó una cuota corta por menos
+                del umbral y por eso NO aplicó solo el pago siguiente. Es trabajo del día:
+                nadie las encuentra buscando por documento, porque quien revisa no sabe
+                que existen. Va aparte del desplegable de estado a propósito — esas 3
+                opciones parten la cartera sin solapes. */}
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={pagoSinAplicar}
+                onChange={(e) => { setPagoSinAplicar(e.target.checked); setPage(1); }}
+                className="rounded border-gray-300 text-brand-600 focus:ring-brand-500/50"
+              />
+              <span className="font-medium">Con pago sin aplicar</span>
+            </label>
+            {(search || estado !== "todas" || vencFrom || vencTo || pagoParcial || medioPago || payFrom || payTo || cruceFrom || cruceTo || conNotificacion || multiCuota || pagoSinAplicar || diferencia || wompiTipo) && (
+              <button
+                onClick={() => { setSearch(""); setEstado("todas"); setVencFrom(""); setVencTo(""); setPagoParcial(false); setMedioPago(""); setPayFrom(""); setPayTo(""); setCruceFrom(""); setCruceTo(""); setConNotificacion(false); setMultiCuota(false); setPagoSinAplicar(false); setDiferencia(""); setWompiTipo(""); setPage(1); }}
+                className="text-red-500 hover:text-red-700 text-xs underline"
+              >
+                Limpiar filtros
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="px-1 flex items-center justify-between gap-3">
+          <span className="text-sm text-gray-500">
+            {loading
+              ? "Cargando..."
+              : diferencia && renglones !== null
+                // Con el filtro puesto se pagina por CUOTA, no por renglón: una cuota
+                // arrastra sus líneas derivadas, así que los dos números no coinciden.
+                ? `${total.toLocaleString("es-CO")} cuotas (${renglones.toLocaleString("es-CO")} renglones)`
+                : `${total.toLocaleString("es-CO")} registros encontrados`}
+          </span>
+
+          <div ref={dropdownRef} className="relative">
+            <button
+              onClick={() => setDropdownOpen((o) => !o)}
+              disabled={loading || total === 0}
+              className="flex items-center gap-1.5 bg-brand-600 text-white text-sm px-3.5 py-1.5 rounded-full shadow-sm hover:bg-brand-700 hover:brightness-105 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Descargar
+              <svg className={`w-3 h-3 ml-0.5 transition-transform duration-200 ease-(--ease-spring) ${dropdownOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {dropdownOpen && (
+              <div className="animate-pop-in origin-top-right absolute right-0 mt-1.5 w-44 bg-white border border-black/[0.06] rounded-xl shadow-[0_8px_24px_-8px_rgba(0,0,0,0.2)] z-50 overflow-hidden py-1">
+                <button
+                  onClick={downloadExcel}
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-100"
+                >
+                  Descargar Excel
+                </button>
+                <button
+                  onClick={downloadCSV}
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-100"
+                >
+                  Descargar CSV
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {fetchError && (
+          <div className="text-sm text-red-600 bg-red-50 border border-red-200/80 rounded-xl px-3.5 py-2">
+            {fetchError}
+          </div>
+        )}
+
+        <div className={`${PANEL} animate-fade-in [animation-delay:100ms] overflow-hidden`}>
+          <div ref={tableContainerRef} className="overflow-auto max-h-[65vh]">
+            <table className="w-full text-sm border-collapse">
+              <thead className="sticky top-0 z-10">
+                <tr className="bg-gray-50 text-gray-500 text-left border-b border-black/[0.06]">
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Llave</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Sistema Financiero</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Inscrip.</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Cliente</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Moneda</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Fecha Vencimiento</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Valor Cuota</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Pago</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Valor a Cobrar</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Programa</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Fecha Pago</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Medio de Pago</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Valor Pago</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 1</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Código Trans. 2</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Correo Electrónico</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Notificación</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Diferencia</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Documento</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Estado</th>
+                  <th className="px-4 py-3 font-medium whitespace-nowrap">Acciones</th>
                 </tr>
-              ) : (
-                data.map((row) => {
-                  const parcial = isPagoParcial(row);
-                  const saldoFavor = isSaldoFavor(row);
-                  const pendiente = !row.fecha_pago;
-                  // La cuota que quedó corta y tiene plata esperando (2026-08-21). NO es
-                  // `pendiente` —recibió el primer pago—, así que sin esto el botón
-                  // "Asociar" no se pintaría justo en la fila que lo necesita.
-                  const avisoSinAplicar = esPagoSinAplicar(row.notificacion);
-                  // Cerrada = alguien la cerró y `pago` ya refleja el valor_pago
-                  // (si el pago cambió después, vuelve a ofrecerse el cierre).
-                  const cerrada = row.pago_confirmado != null && row.pago_confirmado === row.valor_pago;
-                  // El Excel ya trae el pago en `pago` (mismo número, o centavos
-                  // de diferencia): la cuota ya está cobrada en el Sistema
-                  // Financiero, así que no hay nada que cerrar — y cerrarla
-                  // duplicaría el pago, porque la fórmula acumula.
-                  // Ojo: `pago` es text en la base y puede traer decimales
-                  // ("485086.5"), así que va parseFloat — NO parseMonto, que
-                  // está hecho para la entrada del usuario ("." = miles).
-                  const yaCobrada = !cerrada && row.valor_pago != null
-                    && Math.abs(numPago(row.pago) - row.valor_pago) <= 100;
-                  const saving = rowSaving === row.llave;
-                  const cuotaValue = cuotaEdits[row.llave] ?? formatMonto(row.valor_cuota);
-                  const cuotaChanged = cuotaValue.trim() !== "" && parseMonto(cuotaValue) !== row.valor_cuota && !Number.isNaN(parseMonto(cuotaValue));
-                  // <input type="date"> entrega YYYY-MM-DD, el mismo formato que
-                  // guarda la columna `date` — no pasar por Date(), que
-                  // interpreta ese string en UTC y en Colombia devuelve el día
-                  // anterior.
-                  const vencValue   = vencEdits[row.llave] ?? row.fecha_vencimiento ?? "";
-                  const vencChanged = vencValue.trim() !== "" && vencValue !== row.fecha_vencimiento;
-                  // Abono del Excel, editable. `pago` es text y puede traer
-                  // centavos ("485086.5"): se muestra redondeado a pesos como el
-                  // resto de la vista, y la comparación "cambió / no cambió" va
-                  // contra ese mismo entero — si no, toda cuota con decimales
-                  // saldría con el ✓ puesto de entrada. Vaciar la casilla borra
-                  // la corrección (pago_manual = null), y por eso cuenta como
-                  // cambio solo si la fila hoy trae abono.
-                  const pagoActual  = Math.round(numPago(row.pago));
-                  const pagoGuardado = row.pago != null && row.pago.trim() !== "";
-                  const pagoValue   = pagoEdits[row.llave] ?? (pagoGuardado ? formatMonto(pagoActual) : "");
-                  const pagoNum     = parseMonto(pagoValue);
-                  const pagoChanged = pagoValue.trim() === ""
-                    ? pagoGuardado
-                    : Number.isFinite(pagoNum) && pagoNum !== pagoActual;
-                  // El documento tiene plata que el panel puede ofrecer: algún pago
-                  // con restante, contado igual que lo cuenta GET /asociar. Desde el
-                  // 2026-10-02 ya NO exige 2+ inscripciones (§6 del spec, decisión
-                  // del usuario): con el panel por cuota la pregunta es "a esta
-                  // cuota, ¿qué plata le entra?", y vale con una sola inscripción.
-                  const hayPagoDelDoc = multiInscripcionDocs.has(row.cruce_access);
-                  // Regla #4/#7: mensaje + botón de asociar saldo a favor.
-                  // Unión de las dos señales, sin repetir un saldo que caiga por ambas.
-                  const porDoc    = saldosPorDocumento.get((row.cruce_access || "").trim()) || [];
-                  const porCorreo = saldosPorCorreo.get((row.correo || "").trim().toLowerCase()) || [];
-                  const saldosDeLaFila = Array.from(
-                    new Map([...porDoc, ...porCorreo].map((s) => [s.id, s])).values()
-                  );
-                  const grupo = saldosDeLaFila.length
-                    ? { total: saldosDeLaFila.reduce((a, s) => a + Number(s.disponible), 0),
-                        rows:  saldosDeLaFila }
-                    : undefined;
-                  // Una cuota YA CUBIERTA también puede recibir plata, y por eso acá no
-                  // se pregunta si la cuota necesita dinero (hasta el 14/09 había un
-                  // `necesitaDinero = pendiente || parcial` en esta condición). Si la
-                  // persona pagó de más, la fila TIENE que decirlo: con la plata
-                  // asociada, el pipeline escribe "PAGA N CUOTAS" / "N CUOTAS + ABONO",
-                  // que son las etiquetas con las que el área lee la cartera. Sin
-                  // asociar, esa misma fila dice "Pagada completa · Diferencia $0" de
-                  // alguien que pagó el doble, y el único rastro es el saldo al costado
-                  // (caso doc 79670680: dos pagos de $400.000 sobre una cuota de
-                  // $400.000, y la pantalla no dejaba poner el segundo ahí).
-                  // El botón tampoco se esconde por haber originado el saldo (antes
-                  // había un `!esOrigenSaldo`): desde el 3/8 el pipeline ya no pinta la
-                  // plata descartada sobre su cuota de origen, así que esas quedaban sin
-                  // badge Y sin botón.
-                  // 🔴 Lo ÚNICO que nunca recibe plata es una línea de deuda cuya cuota
-                  // original siga abierta: ahí la plata va en la original, si no se
-                  // pagaría la misma deuda dos veces (regla del 30 de julio).
-                  //
-                  // 🔴 Una cuota declarada "pagada por Cartera" tampoco recibe plata
-                  // (spec del 2026-10-02). Las dos mitades de la señal:
-                  //   · ya aplicada por el pipeline → se ve en la fila;
-                  //   · recién cerrada, con el reproceso corriendo → la fila no dice
-                  //     NADA (el cierre vive en un override), y entonces la única
-                  //     señal que hay en la pantalla es que GET /asociar la dejó
-                  //     fuera de `inscripciones`, que es justo lo que ese endpoint
-                  //     decide con `fetchCerradasManual`. Se le cree a él en vez de
-                  //     volver a preguntar los overrides desde acá.
-                  // ⚠️ La ausencia solo significa "cerrada" para una cuota que el
-                  // endpoint SÍ habría listado: una cuota ya cubierta no está en esa
-                  // lista y está perfectamente bien (regla del 14/09).
-                  const datosDelDoc   = asociarData[row.cruce_access];
-                  const deberiaEstar  = pendiente || avisoSinAplicar;
-                  const cerradaPorCartera =
-                    row.notificacion === "CARTERA" || row.medio_pago === "Cartera" ||
-                    (deberiaEstar && !!datosDelDoc
-                      && !datosDelDoc.inscripciones.some((i) => i.llave === row.llave));
-                  // Lo único que nunca recibe plata, además, es una línea de deuda
-                  // cuya cuota original siga abierta.
-                  const puedeRecibirPlata = !row.original_abierta && !cerradaPorCartera;
-                  const puedeAsociarSaldo = !!grupo && grupo.total > 0 && puedeRecibirPlata;
-                  // Asociar un PAGO (no un saldo) sigue pidiendo que la cuota esté
-                  // pendiente o traiga el aviso `PAGO SIN APLICAR`, igual que antes:
-                  // lo que cambió es a qué documentos se les ofrece, no a qué cuotas.
-                  // ⚠️ `ofrecePagos` (se ve la sección) y `puedeAsociarPago` (se
-                  // pueden apretar los botones) son distintos a propósito: en una
-                  // cuota que no puede recibir plata, la sección se sigue viendo para
-                  // dejar MANDAR ese pago a otro documento —que es el único camino que
-                  // había y no se quita—, con el motivo escrito arriba.
-                  const ofrecePagos      = hayPagoDelDoc && deberiaEstar;
-                  const puedeAsociarPago = ofrecePagos && puedeRecibirPlata;
-                  // Enviar ese saldo a otra persona NO exige que esta cuota necesite
-                  // dinero: el caso normal es justo el contrario — la cuota quedó
-                  // pagada y lo que sobró es de otra cédula (un diplomado de 2 cupos
-                  // pagado de un solo giro). Si el bloque solo apareciera cuando se
-                  // puede asociar, la fila con badge "Saldo a favor" —que es donde
-                  // está la plata a repartir— no ofrecería nada, que es el mismo
-                  // agujero que dejó el envío del panel de Asociar (ese panel solo
-                  // se abre con 2+ inscripciones debiendo).
-                  const tieneSaldo = !!grupo && grupo.total > 0;
-                  const cuotaRestante = pendiente ? row.valor_a_cobrar : Math.abs(row.diferencia ?? 0);
-                  // Regla #3: descartar solo tiene sentido sobre un pago real
-                  // ya aplicado — un cierre manual de cartera no tiene pago
-                  // asociado que descartar.
-                  const puedeDescartar = !pendiente && row.medio_pago !== "Cartera" && row.notificacion !== "CARTERA";
-                  // La excepción, y la única: una cuota cerrada por Cartera QUE TENGA
-                  // un pago encima. Eso no debería existir —desde el 2/10 las cuatro
-                  // puertas de asociación la rechazan— pero el caso de ese día
-                  // (doc 1099208759: cerrada por Cartera y comiéndose $1.040.000, con
-                  // 29 segundos entre los dos clics) solo se pudo deshacer por SQL.
-                  // 🔴 `puedeDescartar` NO se toca: sigue dejando fuera las cerradas por
-                  // Cartera, que es lo correcto — un cierre por Cartera normal no tiene
-                  // pago que soltar, y ofrecer el botón ahí abriría un panel vacío en las
-                  // 27 cuotas cerradas de la cartera. Hoy esta condición alcanza 0 filas.
-                  const puedeDescartarCerradaPorCartera =
-                    (row.medio_pago === "Cartera" || row.notificacion === "CARTERA") &&
-                    row.tiene_asociaciones === true;
-                  // Las acciones de la fila, en el orden fijo del spec (§1.1): no
-                  // depende de la cuota, simplemente no se listan las que no aplican.
-                  // 🔴 Las SEÑALES no entran acá y siguen visibles en la celda
-                  // ("Cuota cerrada", "Ya cobrada", el saldo a favor, el badge del
-                  // reproceso y los mensajes): no son acciones, son lo que le dice al
-                  // área que en esa fila hay trabajo, y detrás de un clic nadie las ve
-                  // pasando la tabla.
-                  const acciones: { key: string; label: string; onClick: () => void; className: string; title?: string }[] = [];
-                  if (pendiente && row.valor_pago == null) acciones.push({
-                    key: "cierre",
-                    label: cierreOpen[row.llave] ? "Ocultar cierre" : "Marcar pagada por Cartera",
-                    onClick: () => toggleCierrePanel(row),
-                    className: "text-gray-700",
-                    title: "La cuota no tiene pago identificado — declararla pagada por cartera",
-                  });
-                  if (puedeDescartar || puedeDescartarCerradaPorCartera) acciones.push({
-                    key: "descartar",
-                    label: descartarOpen[row.llave] ? "Ocultar descartar" : "Descartar pago",
-                    onClick: () => toggleDescartarPanel(row),
-                    className: "text-red-700",
-                    title: puedeDescartarCerradaPorCartera
-                      ? "Esta cuota está cerrada por Cartera y además tiene un pago aplicado: suéltalo acá; vuelve como saldo a favor del documento"
-                      : "Suelta un pago de esta cuota; vuelve como saldo a favor del documento",
-                  });
-                  // Va DEBAJO de "Descartar pago" y no lo reemplaza: a veces solo hay
-                  // que descartar, y un botón que además cierre sería un problema
-                  // (decisión explícita del usuario). En gris/pizarra, no en rojo,
-                  // porque lo que hace es CERRAR — el descarte es el medio.
-                  if (puedeDescartar && !cerrada && !yaCobrada) acciones.push({
-                    key: "descartar-cerrar",
-                    label: descartarCerrarOpen[row.llave] ? "Ocultar descartar y cerrar" : "Descartar y marcar pagada por Cartera",
-                    onClick: () => toggleDescartarCerrarPanel(row),
-                    className: "text-slate-700",
-                    title: "Suelta los pagos de la cuota y la cierra por Cartera, de un paso",
-                  });
-                  // UNA sola acción para la plata que le entra a esta cuota. Antes
-                  // eran dos —"⚠️ Asociar" (pagos del documento) y "Asociar pago"
-                  // (saldos a favor)— que abrían dos paneles distintos sobre la misma
-                  // fila, y ninguno de los dos decía sobre qué cuota se trabajaba.
-                  // El panel que abre tiene las dos secciones.
-                  if (ofrecePagos || tieneSaldo) acciones.push({
-                    key: "asociar",
-                    label: asociarOpen[row.llave]
-                      ? "Ocultar asociar"
-                      // Sin nada que asociar a ESTA cuota, lo único que ofrece el
-                      // panel es mandar el saldo a otro documento: la etiqueta lo
-                      // dice, para que nadie lo abra esperando otra cosa. Es el caso
-                      // normal de una cuota ya pagada cuyo sobrante es de otra cédula.
-                      : (puedeAsociarPago || puedeAsociarSaldo) ? "⚠️ Asociar pago" : "Enviar a otro documento",
-                    onClick: () => toggleAsociarPanel(row),
-                    className: (puedeAsociarPago || puedeAsociarSaldo) ? "text-amber-700" : "text-teal-700",
-                    title: "Muestra los pagos y los saldos del documento que le pueden entrar a ESTA cuota",
-                  });
-                  if (necesitaUltimaCuota(row)) acciones.push({
-                    key: "ultima",
-                    label: ultimaCuotaLlaves.has(row.llave) ? "✓ Última cuota" : "Es la última cuota",
-                    onClick: () => handleToggleUltimaCuota(row),
-                    className: "text-indigo-700",
-                    title: "Marca que esta es la última cuota de la inscripción (modo B): un sobrante pasa a excedente final, un faltante se condona hasta $50k",
-                  });
-                  // Hay DOS tipos de cierre y no se deshacen igual. Para el área es la
-                  // misma acción —una sola etiqueta "Reabrir"—; la diferencia es interna:
-                  // el cierre por Cartera vive en un override (lo apaga el pipeline en su
-                  // próxima corrida, y queda sin Día del Cruce a propósito: esas cuotas no
-                  // tienen pago real que cruzar), mientras el cierre con pago asignado se
-                  // deshace escribiendo la fila con la inversa de su fórmula.
-                  const cierrePorCartera = !pendiente && row.notificacion === "CARTERA";
-                  const cierreConPago    = cerrada && row.notificacion !== "CARTERA";
-                  if (cierrePorCartera || cierreConPago) acciones.push({
-                    key: "reabrir",
-                    label: "Reabrir",
-                    onClick: () => cierrePorCartera ? handleReabrirCartera(row) : handleReabrirCuota(row),
-                    className: "text-slate-700",
-                    title: cierrePorCartera
-                      ? "Deshace el cierre manual — la cuota vuelve a pendiente en el próximo cruce"
-                      : "Deshace el cierre y pone el Día del Cruce de hoy. No cambia el pago ni los datos de la cuota.",
-                  });
-                  const savingDyC = rowSaving === `dycerrar:${row.llave}`;
-                  const asociacionesDeLaCuota = descartarData[row.llave] || [];
-                  // Los formularios viven DEBAJO de la fila, al ancho de la tabla
-                  // (§1.3): son listas con montos, casillas y campo de documento
-                  // destino — dentro de un menú de ~250 px quedan peor que hoy.
-                  // 🔴 Las cinco llaves van por `row.llave`. El asociar era la única
-                  // que iba por documento, y era lo que expandía todas las filas de
-                  // la persona a la vez.
-                  const panelAbierto = cierreOpen[row.llave] || asociarOpen[row.llave]
-                    || descartarCerrarOpen[row.llave] || descartarOpen[row.llave];
-                  return (
-                  <Fragment key={row.id}>
-                  <tr className={`hover:bg-gray-50/70 transition-colors duration-100 align-top ${rowTint(row)}`}>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.llave)}</td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.sistema_financiero)}</td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">
-                      {fmt(row.inscrip)}
-                      {(row.cuotas_inscripcion ?? 1) > 1 && (
-                        <span className="ml-1.5 text-[11px] text-gray-500">{row.cuotas_inscripcion} cuotas</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cliente)}</td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.moneda)}</td>
-                    <td className="px-4 py-2.5">
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="date"
-                          value={vencValue}
-                          onChange={(e) => setVencEdits((prev) => ({ ...prev, [row.llave]: e.target.value }))}
-                          disabled={saving}
-                          className="w-36 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
-                        />
-                        {vencChanged && (
-                          <button
-                            onClick={() => handleSaveFechaVencimiento(row)}
-                            disabled={saving}
-                            title="Guardar corrección de fecha de vencimiento"
-                            className="text-xs px-1.5 py-1 rounded-lg bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
-                          >
-                            ✓
-                          </button>
+              </thead>
+              <tbody key={page} className="divide-y divide-gray-100 animate-fade-in">
+                {loading && data.length === 0 ? (
+                  Array.from({ length: 8 }).map((_, i) => (
+                    <tr key={i}>
+                      {Array.from({ length: 21 }).map((_, j) => (
+                        <td key={j} className="px-4 py-3">
+                          <div className="h-3 bg-gray-200 rounded animate-pulse" style={{ width: `${60 + (i * j * 7) % 40}%` }} />
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                ) : data.length === 0 ? (
+                  <tr>
+                    <td colSpan={21} className="text-center py-12 text-gray-400">No hay registros</td>
+                  </tr>
+                ) : (
+                  data.map((row) => {
+                    const d = derivarFila(row);
+                    const { parcial, saldoFavor, cerrada, yaCobrada, tieneSaldo, grupo } = d;
+                    const saving = rowSaving === row.llave;
+                    const cuotaValue = cuotaEdits[row.llave] ?? formatMonto(row.valor_cuota);
+                    const cuotaChanged = cuotaValue.trim() !== "" && parseMonto(cuotaValue) !== row.valor_cuota && !Number.isNaN(parseMonto(cuotaValue));
+                    // <input type="date"> entrega YYYY-MM-DD, el mismo formato que
+                    // guarda la columna `date` — no pasar por Date(), que interpreta
+                    // ese string en UTC y en Colombia devuelve el día anterior.
+                    const vencValue   = vencEdits[row.llave] ?? row.fecha_vencimiento ?? "";
+                    const vencChanged = vencValue.trim() !== "" && vencValue !== row.fecha_vencimiento;
+                    // Abono del Excel, editable. `pago` es text y puede traer centavos
+                    // ("485086.5"): se muestra redondeado a pesos como el resto de la
+                    // vista, y la comparación "cambió / no cambió" va contra ese mismo
+                    // entero — si no, toda cuota con decimales saldría con el ✓ puesto
+                    // de entrada. Vaciar la casilla borra la corrección
+                    // (pago_manual = null), y por eso cuenta como cambio solo si la
+                    // fila hoy trae abono.
+                    const pagoActual  = Math.round(numPago(row.pago));
+                    const pagoGuardado = row.pago != null && row.pago.trim() !== "";
+                    const pagoValue   = pagoEdits[row.llave] ?? (pagoGuardado ? formatMonto(pagoActual) : "");
+                    const pagoNum     = parseMonto(pagoValue);
+                    const pagoChanged = pagoValue.trim() === ""
+                      ? pagoGuardado
+                      : Number.isFinite(pagoNum) && pagoNum !== pagoActual;
+                    const abierta = cajonLlave === row.llave;
+                    return (
+                    <Fragment key={row.id}>
+                    <tr className={`hover:bg-gray-50/70 transition-colors duration-100 align-top ${rowTint(row)}`}>
+                      <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.llave)}</td>
+                      <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.sistema_financiero)}</td>
+                      <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">
+                        {fmt(row.inscrip)}
+                        {(row.cuotas_inscripcion ?? 1) > 1 && (
+                          <span className="ml-1.5 text-[11px] text-gray-500">{row.cuotas_inscripcion} cuotas</span>
                         )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          value={cuotaValue}
-                          onChange={(e) => setCuotaEdits((prev) => ({ ...prev, [row.llave]: e.target.value }))}
-                          onBlur={(e) => setCuotaEdits((prev) => ({ ...prev, [row.llave]: formatMonto(e.target.value) }))}
-                          disabled={saving}
-                          className="w-24 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
-                        />
-                        {cuotaChanged && (
-                          <button
-                            onClick={() => handleSaveValorCuota(row)}
+                      </td>
+                      <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cliente)}</td>
+                      <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.moneda)}</td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="date"
+                            value={vencValue}
+                            onChange={(e) => setVencEdits((prev) => ({ ...prev, [row.llave]: e.target.value }))}
                             disabled={saving}
-                            title="Guardar corrección de valor de cuota"
-                            className="text-xs px-1.5 py-1 rounded-lg bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
-                          >
-                            ✓
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          value={pagoValue}
-                          title="Abono que trae el Excel de cartera. 0 = ese abono no existe; vacío borra la corrección."
-                          onChange={(e) => setPagoEdits((prev) => ({ ...prev, [row.llave]: e.target.value }))}
-                          onBlur={(e) => setPagoEdits((prev) => ({ ...prev, [row.llave]: formatMonto(e.target.value) }))}
-                          disabled={saving}
-                          className="w-24 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
-                        />
-                        {pagoChanged && (
-                          <button
-                            onClick={() => handleSavePago(row, pagoValue)}
-                            disabled={saving}
-                            title="Guardar corrección del abono"
-                            className="text-xs px-1.5 py-1 rounded-lg bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
-                          >
-                            ✓
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.valor_a_cobrar)}</td>
-                    <td className="px-4 py-2.5 text-gray-700">{fmt(row.programa)}</td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.fecha_pago)}</td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.medio_pago)}</td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.valor_pago)}</td>
-                    <td className="px-4 py-2.5 text-gray-700">{fmt(row.codigo_transaccion_1)}</td>
-                    <td className="px-4 py-2.5 text-gray-700">{fmt(row.codigo_transaccion_2)}</td>
-                    <td className="px-4 py-2.5 text-xs">
-                      <span className="text-gray-500">{fmt(row.correo_elec)}</span>
-                    </td>
-                    <td className="px-4 py-2.5 text-xs whitespace-nowrap">{notificacionBadge(row)}</td>
-                    <td className={`px-4 py-2.5 text-gray-700 whitespace-nowrap ${parcial ? "bg-orange-50/60" : saldoFavor ? "bg-teal-50/60" : ""}`}>
-                      <div className="flex items-center gap-1">
-                        {parcial && <span title="Pago parcial: queda saldo pendiente" className="text-orange-600 text-xs">⚠️</span>}
-                        {saldoFavor && <span title="Saldo a favor: pagó de más" className="text-teal-600 text-xs">✓</span>}
-                        <span>{fmtMonto(row.diferencia)}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cruce_access)}</td>
-                    <td className="px-4 py-2.5">{paymentBadge(row)}</td>
-                    <td className="px-4 py-2.5">
-                      <div className="flex flex-col gap-1 min-w-[150px]">
-                        {/* Un solo botón: el 94% de las filas ofrece UNA acción, así
-                            que lo que desordenaba la columna no era la pila de
-                            botones sino los paneles — que ahora abren debajo. */}
-                        <div className="relative" ref={menuOpen === row.llave ? menuRef : undefined}>
-                          <button
-                            onClick={() => setMenuOpen(menuOpen === row.llave ? null : row.llave)}
-                            disabled={saving || acciones.length === 0}
-                            title={acciones.length === 0 ? "Sin acciones para esta cuota" : undefined}
-                            className="w-full text-xs px-2 py-1 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-40 disabled:hover:bg-transparent flex items-center justify-between gap-1"
-                          >
-                            <span>Acciones</span>
-                            <span className="text-[10px] text-gray-400">{menuOpen === row.llave ? "▴" : "▾"}</span>
-                          </button>
-                          {/* El menú se despliega EN FLUJO, no flotando: el contenedor
-                              de la tabla es `overflow-auto max-h-[65vh]`, así que un
-                              menú absoluto quedaría cortado en las filas de abajo,
-                              que son la mayoría de las que se trabajan. */}
-                          {menuOpen === row.llave && acciones.length > 0 && (
-                            <div className="animate-fade-in mt-1 bg-white border border-black/[0.08] rounded-lg shadow-sm py-1 flex flex-col">
-                              {acciones.map((accion) => (
-                                <button
-                                  key={accion.key}
-                                  onClick={() => { setMenuOpen(null); accion.onClick(); }}
-                                  disabled={saving}
-                                  title={accion.title}
-                                  className={`text-left text-xs px-2 py-1.5 hover:bg-gray-50 disabled:opacity-50 ${accion.className}`}
-                                >
-                                  {accion.label}
-                                </button>
-                              ))}
-                            </div>
+                            className="w-36 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                          />
+                          {vencChanged && (
+                            <button
+                              onClick={() => handleSaveFechaVencimiento(row)}
+                              disabled={saving}
+                              title="Guardar corrección de fecha de vencimiento"
+                              className="text-xs px-1.5 py-1 rounded-lg bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                            >
+                              ✓
+                            </button>
                           )}
                         </div>
-                        {cerrada && (
-                          <span className="text-[11px] text-gray-400 whitespace-nowrap">Cuota cerrada</span>
-                        )}
-                        {yaCobrada && (
-                          <span
-                            title="El Sistema Financiero ya la registra cobrada (Pago = Valor pagado) — no hay nada que cerrar"
-                            className="text-[11px] text-gray-400 whitespace-nowrap"
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={cuotaValue}
+                            onChange={(e) => setCuotaEdits((prev) => ({ ...prev, [row.llave]: e.target.value }))}
+                            onBlur={(e) => setCuotaEdits((prev) => ({ ...prev, [row.llave]: formatMonto(e.target.value) }))}
+                            disabled={saving}
+                            className="w-24 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                          />
+                          {cuotaChanged && (
+                            <button
+                              onClick={() => handleSaveValorCuota(row)}
+                              disabled={saving}
+                              title="Guardar corrección de valor de cuota"
+                              className="text-xs px-1.5 py-1 rounded-lg bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                            >
+                              ✓
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={pagoValue}
+                            title="Abono que trae el Excel de cartera. 0 = ese abono no existe; vacío borra la corrección."
+                            onChange={(e) => setPagoEdits((prev) => ({ ...prev, [row.llave]: e.target.value }))}
+                            onBlur={(e) => setPagoEdits((prev) => ({ ...prev, [row.llave]: formatMonto(e.target.value) }))}
+                            disabled={saving}
+                            className="w-24 border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-400 transition-colors disabled:bg-gray-100"
+                          />
+                          {pagoChanged && (
+                            <button
+                              onClick={() => handleSavePago(row, pagoValue)}
+                              disabled={saving}
+                              title="Guardar corrección del abono"
+                              className="text-xs px-1.5 py-1 rounded-lg bg-brand-700 text-white hover:bg-brand-800 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50"
+                            >
+                              ✓
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.valor_a_cobrar)}</td>
+                      <td className="px-4 py-2.5 text-gray-700">{fmt(row.programa)}</td>
+                      <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.fecha_pago)}</td>
+                      <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.medio_pago)}</td>
+                      <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmtMonto(row.valor_pago)}</td>
+                      <td className="px-4 py-2.5 text-gray-700">{fmt(row.codigo_transaccion_1)}</td>
+                      <td className="px-4 py-2.5 text-gray-700">{fmt(row.codigo_transaccion_2)}</td>
+                      <td className="px-4 py-2.5 text-xs">
+                        <span className="text-gray-500">{fmt(row.correo_elec)}</span>
+                      </td>
+                      <td className="px-4 py-2.5 text-xs whitespace-nowrap">{notificacionBadge(row)}</td>
+                      <td className={`px-4 py-2.5 text-gray-700 whitespace-nowrap ${parcial ? "bg-orange-50/60" : saldoFavor ? "bg-teal-50/60" : ""}`}>
+                        <div className="flex items-center gap-1">
+                          {parcial && <span title="Pago parcial: queda saldo pendiente" className="text-orange-600 text-xs">⚠️</span>}
+                          {saldoFavor && <span title="Saldo a favor: pagó de más" className="text-teal-600 text-xs">✓</span>}
+                          <span>{fmtMonto(row.diferencia)}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.cruce_access)}</td>
+                      <td className="px-4 py-2.5">{paymentBadge(row)}</td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex flex-col gap-1 min-w-[150px]">
+                          {/* Un botón, y siempre: abre el cajón lateral con la ficha de
+                              la cuota y todo lo que se le puede hacer. Antes esto era un
+                              menú desplegable que abría cinco formularios en una fila
+                              expandida debajo — y esa fila se dibujaba pegada al borde
+                              IZQUIERDO de la tabla mientras el botón vive en la última
+                              columna, o sea a miles de píxeles de donde estaba mirando
+                              quien lo apretó.
+                              🔴 Va habilitado aunque la cuota no ofrezca ninguna acción:
+                              el cajón también sirve para LEERLA. Son 21 columnas, y la
+                              ficha es la única forma de ver una cuota entera sin
+                              desplazar la tabla de lado a lado. */}
+                          <button
+                            onClick={() => abrirCajon(row)}
+                            className={`w-full text-xs px-2 py-1 rounded-lg border active:scale-95 transition-all duration-200 ease-(--ease-spring) flex items-center justify-between gap-1 ${
+                              abierta
+                                ? "border-brand-600 bg-brand-50 text-brand-700"
+                                : "border-gray-300 text-gray-700 hover:bg-gray-100"
+                            }`}
                           >
-                            Ya cobrada
-                          </span>
-                        )}
-                        {/* Señales (§1.2): la plata a la vista es lo que hace que
-                            alguien mire la fila. El botón para moverla sí está en el
-                            menú. */}
-                        {tieneSaldo && (
-                          <span className="text-[11px] text-teal-800">
-                            Saldo a favor de {fmtMonto(grupo!.total)}
-                          </span>
-                        )}
-                        {marcaFila(row.llave)}
-                        {rowMessage[row.llave] && <span className="text-[11px] text-green-700">{rowMessage[row.llave]}</span>}
-                        {rowError[row.llave] && <span className="text-[11px] text-red-600">{rowError[row.llave]}</span>}
-                        {acciones.length === 0 && !cerrada && !yaCobrada && !tieneSaldo && !rowMessage[row.llave] && (
-                          <span className="text-xs text-gray-400">—</span>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                  {panelAbierto && (
-                  <tr className="bg-gray-50/40">
-                    {/* La celda ocupa las 21 columnas, o sea el ancho ENTERO de la
-                        tabla (miles de píxeles). El botón que abre este panel vive
-                        en la última columna, así que para apretarlo hay que estar
-                        scrolleado a la derecha — y el contenido, que se dibuja desde
-                        el borde izquierdo de la celda, quedaba fuera de la pantalla:
-                        se apretaba la acción y "no pasaba nada".
-                        `sticky left-0` + el ancho de lo VISIBLE lo mantienen debajo
-                        del botón, se haya scrolleado lo que se haya scrolleado. El
-                        padding va en el div, no en la celda, o se quedaría anclado
-                        al lado izquierdo de la tabla. */}
-                    <td colSpan={21} className="p-0">
-                      <div className="sticky left-0 px-4 py-3" style={{ width: panelWidth || undefined }}>
-                      <div className="flex flex-wrap items-start gap-3">
+                            <span>{abierta ? "Abierta" : "Abrir"}</span>
+                            <span className="text-[10px] text-gray-400">{abierta ? "✕" : "›"}</span>
+                          </button>
+                          {/* Las SEÑALES se quedan acá, no se van al cajón (§6.2): son lo
+                              que le dice al área que en esta fila hay trabajo, y detrás
+                              de un clic nadie las ve pasando la tabla. */}
+                          {cerrada && (
+                            <span className="text-[11px] text-gray-400 whitespace-nowrap">Cuota cerrada</span>
+                          )}
+                          {yaCobrada && (
+                            <span
+                              title="El Sistema Financiero ya la registra cobrada (Pago = Valor pagado) — no hay nada que cerrar"
+                              className="text-[11px] text-gray-400 whitespace-nowrap"
+                            >
+                              Ya cobrada
+                            </span>
+                          )}
+                          {tieneSaldo && (
+                            <span className="text-[11px] text-teal-800">
+                              Saldo a favor de {fmtMonto(grupo!.total)}
+                            </span>
+                          )}
+                          {marcaFila(row.llave)}
+                          {rowMessage[row.llave] && <span className="text-[11px] text-green-700">{rowMessage[row.llave]}</span>}
+                          {rowError[row.llave] && <span className="text-[11px] text-red-600">{rowError[row.llave]}</span>}
+                        </div>
+                      </td>
+                    </tr>
+                    </Fragment>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between px-6 py-3 border-t border-black/[0.06] text-sm text-gray-600">
+              <span>Página {page} de {totalPages}</span>
+              <div className="flex gap-1">
+                <button onClick={() => handlePage(1)} disabled={page === 1}
+                  className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring)">«</button>
+                <button onClick={() => handlePage(page - 1)} disabled={page === 1}
+                  className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring)">‹</button>
+                {[...Array(Math.min(5, totalPages))].map((_, i) => {
+                  const p = Math.max(1, Math.min(page - 2, totalPages - 4)) + i;
+                  return (
+                    <button key={p} onClick={() => handlePage(p)}
+                      className={`min-w-7 h-7 px-2 rounded-full hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) ${p === page ? "bg-brand-600 text-white shadow-sm hover:bg-brand-600" : ""}`}>
+                      {p}
+                    </button>
+                  );
+                })}
+                <button onClick={() => handlePage(page + 1)} disabled={page === totalPages}
+                  className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring)">›</button>
+                <button onClick={() => handlePage(totalPages)} disabled={page === totalPages}
+                  className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring)">»</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          EL CAJÓN LATERAL (2026-10-02). Reemplaza al menú desplegable de la
+          columna Acciones y a la fila expandida que se abría debajo.
+
+          Lo que arregla: esa fila se dibujaba con `sticky left-0`, o sea pegada
+          al borde IZQUIERDO de la tabla, mientras el botón que la abría vive en
+          la ÚLTIMA de 21 columnas. Con la tabla desplazada a la derecha —que es
+          como se trabaja— el panel aparecía a miles de píxeles de donde estaba
+          el dedo, y se leía como que el botón no hacía nada.
+
+          🔴 NO lleva fondo oscurecido y NO bloquea la tabla (decisión del
+          usuario): se puede seguir leyendo, desplazando y apretando el botón de
+          otra fila, y el cajón cambia de cuota sin cerrarse.
+
+          🔴 NO es `fixed` ni va por portal (2026-10-02, pedido del usuario con la
+          pantalla a la vista): es una COLUMNA de este flex, construida igual que la
+          barra lateral del shell — `shrink-0 sticky top-0 h-screen`, el ancho
+          animado de `w-0` a `w-[26rem]` con `overflow-hidden`. Así el ancho de la
+          tabla es ancho de verdad y no un padding por debajo de un panel flotante:
+          la barra de scroll horizontal, el `sticky` del encabezado y el ancho
+          visible de las 21 columnas se recalculan solos.
+          ⚠️ Y de paso desaparece la trampa del `position: fixed` en esta app:
+          `DashboardShell` envuelve cada página en un `<div className="animate-fade-in">`
+          cuya animación termina con `fill-mode: both`, dejando puesto un
+          `transform: translateY(0)` — y un transform distinto de `none` crea bloque
+          contenedor para los `fixed` de adentro (medido en Chromium: un hijo
+          `fixed inset-y-0` salía de 3.000 px en vez de los 713 de la ventana). Sin
+          `fixed` no hay nada que anclar.
+          🔴 El contenido va en un `div` de ANCHO FIJO (`w-[26rem]`) adentro: si
+          heredara el ancho que se está animando, los 12 campos de la ficha se
+          re-maquetarían 60 veces por segundo mientras el cajón entra.
+          ══════════════════════════════════════════════════════════════════════ */}
+      <aside
+        role="complementary"
+        aria-label={filaCajon ? `Cuota ${filaCajon.llave}` : undefined}
+        // Con el cajón cerrado el contenido sigue montado (ver el ref de arriba)
+        // pero recortado a 0 px: `inert` lo saca del tabulador y del lector de
+        // pantalla, que si no llegarían a botones que nadie puede ver.
+        inert={!filaCajon}
+        className={`shrink-0 sticky top-0 h-screen bg-white overflow-hidden transition-all duration-300 ease-in-out ${
+          filaCajon
+            ? "w-[26rem] border-l border-black/[0.08] shadow-[-18px_0_40px_-20px_rgba(16,24,40,0.45)]"
+            : "w-0 border-l-0"
+        }`}
+      >
+        <div className="w-[26rem] h-screen flex flex-col">
+        {filaPintada && (() => {
+        const row = filaPintada;
+        const d   = derivarFila(row);
+        const { cerrada, yaCobrada, tieneSaldo, grupo, cuotaRestante,
+                ofrecePagos, puedeAsociarPago, puedeAsociarSaldo, cerradaPorCartera,
+                parcial, saldoFavor } = d;
+        const saving    = rowSaving === row.llave;
+        const savingDyC = rowSaving === `dycerrar:${row.llave}`;
+        const asociacionesDeLaCuota = descartarData[row.llave] || [];
+        const acciones  = accionesDe(row, d);
+        const ficha: [string, React.ReactNode][] = [
+          ["Inscripción", (row.cuotas_inscripcion ?? 1) > 1
+            ? `${fmt(row.inscrip)} · ${row.cuotas_inscripcion} cuotas`
+            : fmt(row.inscrip)],
+          ["Programa", fmt(row.programa)],
+          ["Vence", fmt(row.fecha_vencimiento)],
+          ["Valor cuota", fmtMonto(row.valor_cuota)],
+          ["Valor a cobrar", fmtMonto(row.valor_a_cobrar)],
+          ["Abono del Excel", row.pago ? fmtMonto(Math.round(numPago(row.pago))) : "—"],
+          ["Fecha de pago", fmt(row.fecha_pago)],
+          ["Medio de pago", fmt(row.medio_pago)],
+          ["Valor pagado", fmtMonto(row.valor_pago)],
+          ["Día del cruce", fmt(row.fecha_cruce)],
+          ["Moneda", fmt(row.moneda)],
+          ["Correo", fmt(row.correo_elec)],
+        ];
+        return (
+          <>
+            <div className="px-4 py-3 border-b border-black/[0.06] flex items-start gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-gray-900 truncate">Cuota {fmt(row.llave)}</p>
+                <p className="text-[11px] text-gray-500 truncate">
+                  {fmt(row.cliente)} · doc {fmt(row.cruce_access)}
+                </p>
+              </div>
+              <button
+                onClick={() => setCajonLlave(null)}
+                aria-label="Cerrar el cajón"
+                title="Cerrar (Esc)"
+                className="text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg w-6 h-6 flex items-center justify-center active:scale-95 transition-all duration-200 ease-(--ease-spring)"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* `key` por llave: al cambiar de cuota sin cerrar el cajón, el
+                contenido entra con la animación en vez de saltar de golpe — es lo
+                que hace notar que lo que se está mirando cambió. */}
+            <div key={row.llave} className="animate-fade-in flex-1 overflow-y-auto">
+
+              {/* La ficha: lo que hoy obliga a desplazar 21 columnas de lado a
+                  lado. Va en SOLO LECTURA — las tres casillas editables (vence,
+                  valor de cuota y abono) se quedan en su columna de la tabla, que
+                  es el único sitio que las escribe. */}
+              <div className="px-4 py-3 border-b border-black/[0.06]">
+                <div className="flex items-center gap-2 flex-wrap mb-2">
+                  {paymentBadge(row)}
+                  {notificacionBadge(row)}
+                </div>
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
+                  {ficha.map(([k, v]) => (
+                    <Fragment key={k}>
+                      <dt className="text-gray-500 whitespace-nowrap">{k}</dt>
+                      <dd className="text-gray-900 text-right tabular-nums truncate">{v}</dd>
+                    </Fragment>
+                  ))}
+                  <dt className="text-gray-500 whitespace-nowrap">Diferencia</dt>
+                  <dd className={`text-right tabular-nums ${parcial ? "text-orange-700" : saldoFavor ? "text-teal-700" : "text-gray-900"}`}>
+                    {fmtMonto(row.diferencia)}
+                  </dd>
+                </dl>
+                {/* Las mismas señales de la celda, repetidas acá: con el cajón
+                    abierto la fila puede quedar fuera de la vista. */}
+                {(cerrada || yaCobrada) && (
+                  <p className="mt-2 text-[11px] text-gray-400">
+                    {cerrada ? "Cuota cerrada" : "Ya cobrada en el Sistema Financiero"}
+                  </p>
+                )}
+                {rowMessage[row.llave] && <p className="mt-2 text-[11px] text-green-700">{rowMessage[row.llave]}</p>}
+                {rowError[row.llave] && <p className="mt-2 text-[11px] text-red-600">{rowError[row.llave]}</p>}
+              </div>
+
+              {/* Las acciones que quedan, como fila de botones. "Asociar" NO está
+                  acá: dejó de ser una opción que se elige y pasó a ser la sección
+                  de abajo, siempre a la vista cuando aplica. */}
+              {acciones.length > 0 && (
+                <div className="px-4 py-3 border-b border-black/[0.06]">
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 mb-1.5">Acciones</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {acciones.map((accion) => (
+                      <button
+                        key={accion.key}
+                        onClick={accion.onClick}
+                        disabled={saving}
+                        title={accion.title}
+                        className={`text-xs px-2 py-1 rounded-lg border border-gray-300 hover:bg-gray-50 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 ${accion.className}`}
+                      >
+                        {accion.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Los formularios. Son los mismos de antes, palabra por palabra:
+                  lo único que cambió es dónde se dibujan y que acá van en una
+                  columna en vez de uno al lado del otro. */}
+              <div className="px-4 py-3 flex flex-col gap-3">
                         {cierreOpen[row.llave] && (
                           <div className="animate-fade-in bg-gray-50 border border-gray-200 rounded-lg p-2 space-y-1.5">
                             <label className="block text-[11px] text-gray-500">Fecha de pago</label>
@@ -2431,7 +2607,7 @@ export default function CarteraPreventivaView() {
                             APENAS se abre (requisito del usuario) y lista lo que va a
                             soltar antes de tocar nada. */}
                         {descartarCerrarOpen[row.llave] && (
-                          <div className="animate-fade-in bg-slate-50 border border-slate-200 rounded-lg p-2 space-y-1.5 w-72">
+                          <div className="animate-fade-in bg-slate-50 border border-slate-200 rounded-lg p-2 space-y-1.5">
                             <p className="text-[11px] font-medium text-slate-700">Descartar y marcar pagada por Cartera</p>
                             <label className="block text-[11px] text-gray-500">Fecha de pago</label>
                             <input
@@ -2487,7 +2663,7 @@ export default function CarteraPreventivaView() {
                             Ahora la cuota destino está FIJA (es la fila) y el panel es
                             una lista de ORIGEN de plata: los pagos del documento con
                             restante, los saldos a favor, y el envío a otro documento. */}
-                        {asociarOpen[row.llave] && (
+                        {(ofrecePagos || tieneSaldo) && (
                           <div className="animate-fade-in bg-amber-50/30 border border-amber-200/80 rounded-lg p-2 space-y-1.5">
                             {/* El encabezado nombra la cuota: es lo que deja sin duda a
                                 dónde va la plata que se apriete abajo. */}
@@ -2512,10 +2688,10 @@ export default function CarteraPreventivaView() {
                                 se asocia en la original, o se pagaría dos veces la misma deuda.
                               </p>
                             )}
-                            <div className="flex flex-wrap items-start gap-3">
+                            <div className="flex flex-col gap-3">
                             {/* ── 1. Los pagos del documento con plata sin repartir ── */}
                             {ofrecePagos && (
-                            <div className="bg-white border border-amber-200/80 rounded-lg p-1.5 space-y-1 w-80">
+                            <div className="bg-white border border-amber-200/80 rounded-lg p-1.5 space-y-1">
                             {asociarLoading[row.cruce_access] ? (
                               <p className="text-xs text-gray-500">Cargando...</p>
                             ) : asociarError[row.cruce_access] ? (
@@ -2695,7 +2871,7 @@ export default function CarteraPreventivaView() {
                             )}
                             {/* ── 2. Los saldos a favor del documento ──────────────── */}
                             {tieneSaldo && (
-                          <div className="bg-teal-50/60 border border-teal-200/80 rounded-lg p-1.5 space-y-1 w-80">
+                          <div className="bg-teal-50/60 border border-teal-200/80 rounded-lg p-1.5 space-y-1">
                             {/* Decía "Esta inscripción tiene un saldo a favor de X". Con
                                 el panel por cuota eso se lee como si el saldo fuera de la
                                 cuota de la fila, y no: es del DOCUMENTO (o del correo), y
@@ -2873,7 +3049,7 @@ export default function CarteraPreventivaView() {
                           </div>
                         )}
                         {descartarOpen[row.llave] && (
-                          <div className="animate-fade-in bg-red-50/60 border border-red-200/80 rounded-lg p-2 space-y-1.5 w-64">
+                          <div className="animate-fade-in bg-red-50/60 border border-red-200/80 rounded-lg p-2 space-y-1.5">
                             {descartarLoading[row.llave] ? (
                               <p className="text-xs text-gray-500">Cargando...</p>
                             ) : descartarError[row.llave] ? (
@@ -2901,44 +3077,13 @@ export default function CarteraPreventivaView() {
                             )}
                           </div>
                         )}
-                      </div>
-                      </div>
-                    </td>
-                  </tr>
-                  )}
-                  </Fragment>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between px-6 py-3 border-t border-black/[0.06] text-sm text-gray-600">
-            <span>Página {page} de {totalPages}</span>
-            <div className="flex gap-1">
-              <button onClick={() => handlePage(1)} disabled={page === 1}
-                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring)">«</button>
-              <button onClick={() => handlePage(page - 1)} disabled={page === 1}
-                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring)">‹</button>
-              {[...Array(Math.min(5, totalPages))].map((_, i) => {
-                const p = Math.max(1, Math.min(page - 2, totalPages - 4)) + i;
-                return (
-                  <button key={p} onClick={() => handlePage(p)}
-                    className={`min-w-7 h-7 px-2 rounded-full hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring) ${p === page ? "bg-brand-600 text-white shadow-sm hover:bg-brand-600" : ""}`}>
-                    {p}
-                  </button>
-                );
-              })}
-              <button onClick={() => handlePage(page + 1)} disabled={page === totalPages}
-                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring)">›</button>
-              <button onClick={() => handlePage(totalPages)} disabled={page === totalPages}
-                className="w-7 h-7 flex items-center justify-center rounded-full disabled:opacity-40 hover:bg-gray-100 active:scale-95 transition-all duration-200 ease-(--ease-spring)">»</button>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          </>
+        );
+      })()}
+        </div>
+      </aside>
     </div>
   );
 }
