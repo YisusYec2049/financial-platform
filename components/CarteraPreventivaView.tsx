@@ -2481,27 +2481,109 @@ export default function CarteraPreventivaView() {
         const d   = derivarFila(row);
         const { cerrada, yaCobrada, tieneSaldo, grupo, cuotaRestante,
                 ofrecePagos, puedeAsociarPago, puedeAsociarSaldo, cerradaPorCartera,
-                parcial, saldoFavor } = d;
+                parcial, saldoFavor, pendiente, avisoSinAplicar } = d;
         const saving    = rowSaving === row.llave;
         const savingDyC = rowSaving === `dycerrar:${row.llave}`;
         const asociacionesDeLaCuota = descartarData[row.llave] || [];
         const acciones  = accionesDe(row, d);
+        // La ficha, ya sin lo que subió al titular y a la tira (diferencia,
+        // valor pagado, fecha de pago, medio, día del cruce) ni lo que pasó al
+        // encabezado de la sección (inscripción y programa).
         const ficha: [string, React.ReactNode][] = [
-          ["Inscripción", (row.cuotas_inscripcion ?? 1) > 1
-            ? `${fmt(row.inscrip)} · ${row.cuotas_inscripcion} cuotas`
-            : fmt(row.inscrip)],
-          ["Programa", fmt(row.programa)],
           ["Vence", fmt(row.fecha_vencimiento)],
           ["Valor cuota", fmtMonto(row.valor_cuota)],
           ["Valor a cobrar", fmtMonto(row.valor_a_cobrar)],
           ["Abono del Excel", row.pago ? fmtMonto(Math.round(numPago(row.pago))) : "—"],
-          ["Fecha de pago", fmt(row.fecha_pago)],
-          ["Medio de pago", fmt(row.medio_pago)],
-          ["Valor pagado", fmtMonto(row.valor_pago)],
-          ["Día del cruce", fmt(row.fecha_cruce)],
           ["Moneda", fmt(row.moneda)],
           ["Correo", fmt(row.correo_elec)],
         ];
+        if ((row.cuotas_inscripcion ?? 1) > 1) {
+          ficha.splice(1, 0, ["Cuotas de la inscripción", String(row.cuotas_inscripcion)]);
+        }
+
+        // ── EL TITULAR ───────────────────────────────────────────────────────
+        // 🔴 El número grande es la DIFERENCIA, no el monto del pago: es lo que
+        // decide si en esta cuota hay trabajo. El monto pagado queda abajo, en
+        // letra chica, como de dónde sale.
+        // ⚠️ El orden de las ramas importa: una cuota cerrada puede ser además
+        // parcial o tener saldo, y lo que manda es que está cerrada (no hay nada
+        // que hacerle). Y `pendiente` va antes que `parcial`/`saldoFavor` porque
+        // sin pago la diferencia no describe nada.
+        const difAbs  = Math.abs(row.diferencia ?? 0);
+        const aCobrar = row.valor_a_cobrar ?? 0;
+        // El porcentaje cubierto. `null` = no se pinta la barra: en una cuota
+        // cerrada no hay nada que decidir, y sin `valor_a_cobrar` no hay contra
+        // qué medir (dividir por cero daría una barra llena, que miente).
+        const pctCubierto = aCobrar > 0
+          ? Math.max(0, Math.min(100, ((row.valor_pago ?? 0) / aCobrar) * 100))
+          : null;
+        const titular =
+          cerrada || cerradaPorCartera
+            ? { estado: cerradaPorCartera ? "Cerrada por Cartera" : "Cerrada",
+                monto: fmtMonto(row.valor_pago ?? row.valor_cuota),
+                detalle: cerradaPorCartera
+                  ? "la cobró el proceso manual"
+                  : `cerrada con el pago aplicado${row.fecha_cruce ? ` el ${row.fecha_cruce}` : ""}`,
+                tono: "text-gray-400", barra: "bg-gray-300", pct: null as number | null }
+          : pendiente
+            ? { estado: "Sin pago identificado", monto: fmtMonto(row.valor_a_cobrar),
+                detalle: `es lo que debe · vence ${fmt(row.fecha_vencimiento)}`,
+                tono: "text-gray-900", barra: "bg-gray-300", pct: 0 }
+          : parcial
+            ? { estado: "Le falta", monto: fmtMonto(difAbs),
+                detalle: `pagó ${fmtMonto(row.valor_pago)} de ${fmtMonto(row.valor_a_cobrar)}`,
+                tono: "text-orange-700", barra: "bg-orange-500", pct: pctCubierto }
+          : saldoFavor
+            ? { estado: "Le sobra", monto: fmtMonto(difAbs),
+                detalle: `pagó ${fmtMonto(row.valor_pago)} de ${fmtMonto(row.valor_a_cobrar)}`,
+                tono: "text-teal-700", barra: "bg-teal-600", pct: pctCubierto }
+            : { estado: "Pagada completa", monto: fmtMonto(row.valor_pago),
+                detalle: `cubre la cuota de ${fmtMonto(row.valor_a_cobrar)}`,
+                tono: "text-teal-700", barra: "bg-teal-600", pct: pctCubierto };
+
+        // ── LA CRONOLOGÍA ────────────────────────────────────────────────────
+        // Todo sale de la MISMA fila: no se consulta nada y no se deduce nada que
+        // la fila no diga. Un hito sin su fecha no se inventa — simplemente no
+        // entra (regla 5.1: sin dato, nada).
+        const PUNTO = {
+          gris:  "bg-white border-gray-300",
+          brand: "bg-brand-600 border-brand-600",
+          ok:    "bg-teal-600 border-teal-600",
+          alerta:"bg-orange-500 border-orange-500",
+        };
+        const crono: { t1: string; t2: string; punto: string }[] = [
+          { t1: "Vencía", t2: `${fmt(row.fecha_vencimiento)} · ${fmtMonto(row.valor_cuota)}`, punto: PUNTO.gris },
+        ];
+        if (row.pago && Math.round(numPago(row.pago)) > 0) {
+          crono.push({ t1: "Abono traído por el Excel",
+                       t2: fmtMonto(Math.round(numPago(row.pago))), punto: PUNTO.gris });
+        }
+        if (row.fecha_pago) {
+          crono.push({ t1: "Pago recibido",
+                       t2: [row.fecha_pago, row.medio_pago, row.valor_pago != null ? fmtMonto(row.valor_pago) : null]
+                             .filter(Boolean).join(" · "),
+                       punto: PUNTO.brand });
+        }
+        if (row.fecha_cruce) {
+          crono.push({ t1: cerradaPorCartera ? "Declarada pagada por Cartera" : "Cruzada",
+                       t2: `${row.fecha_cruce}${cerradaPorCartera ? "" : parcial ? " · no alcanzó a cubrirla" : " · cubrió la cuota"}`,
+                       punto: cerradaPorCartera ? PUNTO.gris : parcial ? PUNTO.alerta : PUNTO.ok });
+        }
+        if (!pendiente && parcial) {
+          crono.push({ t1: `Quedó corta por ${fmtMonto(difAbs)}`,
+                       t2: avisoSinAplicar
+                         ? "menos del umbral: no nació su cuota de deuda"
+                         : "la deuda baja como una línea aparte",
+                       punto: PUNTO.alerta });
+        }
+        if (!pendiente && saldoFavor) {
+          crono.push({ t1: `Sobró ${fmtMonto(difAbs)}`,
+                       t2: "queda como saldo a favor del documento", punto: PUNTO.ok });
+        }
+        if (avisoSinAplicar) {
+          crono.push({ t1: "Esperando que alguien la asocie",
+                       t2: "el pago siguiente no se aplica solo", punto: PUNTO.alerta });
+        }
         return (
           <>
             <div className="px-4 py-3 border-b border-black/[0.06] flex items-start gap-2">
@@ -2526,59 +2608,109 @@ export default function CarteraPreventivaView() {
                 que hace notar que lo que se está mirando cambió. */}
             <div key={row.llave} className="animate-fade-in flex-1 overflow-y-auto">
 
-              {/* La ficha: lo que hoy obliga a desplazar 21 columnas de lado a
-                  lado. Va en SOLO LECTURA — las tres casillas editables (vence,
+              {/* El aviso del pipeline (2026-08-21) como FRANJA, no como texto
+                  gris: es el único de la pantalla que pide una acción concreta
+                  —asociar esa plata a mano— y el monto viaja dentro del texto. */}
+              {avisoSinAplicar && (
+                <p className="px-4 py-2 text-[11px] bg-amber-50 text-amber-800 border-b border-amber-200/80">
+                  <span className="font-semibold">{row.notificacion}</span> — hay plata esperando que alguien la asocie.
+                </p>
+              )}
+
+              {/* EL TITULAR. Lo que decide el trabajo es la DIFERENCIA, no el
+                  monto: es el número por el que se abre el cajón. El monto pagado
+                  baja a letra chica. 🔴 El color se usa una sola vez por cajón —
+                  acá— y de ahí sale el estado; repartirlo por toda la ficha es lo
+                  que hacía que no se leyera ninguno. */}
+              <div className="px-4 pt-3.5 pb-3 border-b border-black/[0.06]">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className={`text-[11.5px] font-semibold ${titular.tono}`}>{titular.estado}</p>
+                    <p className={`text-[27px] leading-tight font-semibold tabular-nums tracking-tight ${titular.tono}`}>
+                      {titular.monto}
+                    </p>
+                    <p className="text-[11px] text-gray-500 tabular-nums mt-0.5">{titular.detalle}</p>
+                  </div>
+                  {/* Los badges se dejan encoger (`min-w-0 max-w-[48%]`): hay
+                      notificaciones largas —"1 CUOTA + ABONO", "PAGA DOS CUOTAS"—
+                      y con `shrink-0` empujarían el titular fuera de la caja. */}
+                  <div className="flex flex-col items-end gap-1 min-w-0 max-w-[48%] text-right">
+                    {paymentBadge(row)}
+                    {!avisoSinAplicar && row.notificacion && notificacionBadge(row)}
+                  </div>
+                </div>
+                {/* La barra dice cuánto se cubrió sin leer un número. No se pinta
+                    en una cuota cerrada (no hay nada que decidir) ni cuando no hay
+                    contra qué medir. */}
+                {titular.pct != null && (
+                  <div className="mt-2.5 h-[5px] rounded-full bg-gray-200 overflow-hidden">
+                    <div className={`h-full ${titular.barra}`} style={{ width: `${titular.pct}%` }} />
+                  </div>
+                )}
+                {/* Las mismas señales de la celda, repetidas acá: con el cajón
+                    abierto la fila puede quedar fuera de la vista. */}
+                {rowMessage[row.llave] && <p className="mt-2 text-[11px] text-green-700">{rowMessage[row.llave]}</p>}
+                {rowError[row.llave] && <p className="mt-2 text-[11px] text-red-600">{rowError[row.llave]}</p>}
+              </div>
+
+              {/* La tira de los tres datos que se miran de reojo. */}
+              <div className="flex border-b border-black/[0.06]">
+                {([["Pagó", fmt(row.fecha_pago)], ["Medio", fmt(row.medio_pago)], ["Cruce", fmt(row.fecha_cruce)]] as const).map(([k, v], i) => (
+                  <div key={k} className={`flex-1 min-w-0 px-3 py-2 ${i < 2 ? "border-r border-black/[0.05]" : ""}`}>
+                    <p className="text-[9.5px] uppercase tracking-wider text-gray-400">{k}</p>
+                    <p className="text-[11.5px] text-gray-900 truncate mt-0.5">{v}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* La ficha, en SOLO LECTURA — las tres casillas editables (vence,
                   valor de cuota y abono) se quedan en su columna de la tabla, que
                   es el único sitio que las escribe. */}
-              <div className="px-4 py-3 border-b border-black/[0.06]">
-                <div className="flex items-center gap-2 flex-wrap mb-2">
-                  {paymentBadge(row)}
-                  {notificacionBadge(row)}
+              <div className="border-b border-black/[0.06]">
+                <div className="px-4 py-2 bg-gray-50 flex items-center justify-between gap-2">
+                  <p className="text-[10.5px] font-semibold uppercase tracking-wider text-gray-600">La cuota</p>
+                  <span className="text-[10.5px] text-gray-500 truncate">
+                    {fmt(row.inscrip)} · {fmt(row.programa)}
+                  </span>
                 </div>
-                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
+                <dl className="px-4 py-2.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11.5px]">
                   {ficha.map(([k, v]) => (
                     <Fragment key={k}>
                       <dt className="text-gray-500 whitespace-nowrap">{k}</dt>
                       <dd className="text-gray-900 text-right tabular-nums truncate">{v}</dd>
                     </Fragment>
                   ))}
-                  <dt className="text-gray-500 whitespace-nowrap">Diferencia</dt>
-                  <dd className={`text-right tabular-nums ${parcial ? "text-orange-700" : saldoFavor ? "text-teal-700" : "text-gray-900"}`}>
-                    {fmtMonto(row.diferencia)}
-                  </dd>
                 </dl>
-                {/* Las mismas señales de la celda, repetidas acá: con el cajón
-                    abierto la fila puede quedar fuera de la vista. */}
                 {(cerrada || yaCobrada) && (
-                  <p className="mt-2 text-[11px] text-gray-400">
+                  <p className="px-4 pb-2.5 -mt-1 text-[11px] text-gray-400">
                     {cerrada ? "Cuota cerrada" : "Ya cobrada en el Sistema Financiero"}
                   </p>
                 )}
-                {rowMessage[row.llave] && <p className="mt-2 text-[11px] text-green-700">{rowMessage[row.llave]}</p>}
-                {rowError[row.llave] && <p className="mt-2 text-[11px] text-red-600">{rowError[row.llave]}</p>}
               </div>
 
-              {/* Las acciones que quedan, como fila de botones. "Asociar" NO está
-                  acá: dejó de ser una opción que se elige y pasó a ser la sección
-                  de abajo, siempre a la vista cuando aplica. */}
-              {acciones.length > 0 && (
-                <div className="px-4 py-3 border-b border-black/[0.06]">
-                  <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 mb-1.5">Acciones</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {acciones.map((accion) => (
-                      <button
-                        key={accion.key}
-                        onClick={accion.onClick}
-                        disabled={saving}
-                        title={accion.title}
-                        className={`text-xs px-2 py-1 rounded-lg border border-gray-300 hover:bg-gray-50 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 ${accion.className}`}
-                      >
-                        {accion.label}
-                      </button>
-                    ))}
-                  </div>
+              {/* LA CRONOLOGÍA. Las cuatro fechas que la ficha enseña como cuatro
+                  renglones iguales —vence, pago, cruce, y lo que pasó con el
+                  sobrante o el faltante— puestas en orden. Es lo que convierte la
+                  ficha en una explicación: se lee de dónde salió la diferencia sin
+                  restar nada de cabeza. Sale toda de la misma fila, no se consulta
+                  nada nuevo. */}
+              <div className="border-b border-black/[0.06]">
+                <div className="px-4 py-2 bg-gray-50">
+                  <p className="text-[10.5px] font-semibold uppercase tracking-wider text-gray-600">Cronología</p>
                 </div>
-              )}
+                <ol className="px-4 py-3 pl-8">
+                  {crono.map((ev, i) => (
+                    <li key={i} className={`relative ${i < crono.length - 1 ? "pb-3" : ""}`}>
+                      <span className={`absolute -left-[14px] top-[3px] w-2 h-2 rounded-full border-2 ${ev.punto}`} />
+                      {i < crono.length - 1 && (
+                        <span className="absolute -left-[10.5px] top-[13px] bottom-0 w-px bg-gray-200" />
+                      )}
+                      <p className="text-[11.5px] font-semibold text-gray-900">{ev.t1}</p>
+                      <p className="text-[10.5px] text-gray-500 tabular-nums">{ev.t2}</p>
+                    </li>
+                  ))}
+                </ol>
+              </div>
 
               {/* Los formularios. Son los mismos de antes, palabra por palabra:
                   lo único que cambió es dónde se dibujan y que acá van en una
@@ -2664,26 +2796,44 @@ export default function CarteraPreventivaView() {
                             una lista de ORIGEN de plata: los pagos del documento con
                             restante, los saldos a favor, y el envío a otro documento. */}
                         {(ofrecePagos || tieneSaldo) && (
-                          <div className="animate-fade-in bg-amber-50/30 border border-amber-200/80 rounded-lg p-2 space-y-1.5">
+                          <div className="animate-fade-in -mx-4 border-y border-black/[0.06]">
                             {/* El encabezado nombra la cuota: es lo que deja sin duda a
-                                dónde va la plata que se apriete abajo. */}
-                            <div className="pb-1 border-b border-amber-200/70">
-                              <p className="text-[11px] font-medium text-amber-900">
-                                Plata que le puede entrar a la cuota {fmt(row.llave)}
+                                dónde va la plata que se apriete abajo. Desde el cajón el
+                                nombre ya está arriba y fijo, así que acá queda la línea
+                                que SÍ cambia por cuota: qué le falta. */}
+                            <div className="px-4 py-2 bg-gray-50 flex items-center justify-between gap-2">
+                              <p className="text-[10.5px] font-semibold uppercase tracking-wider text-gray-600">
+                                Plata que le puede entrar
                               </p>
-                              <p className="text-[11px] text-amber-800">
-                                {fmt(row.inscrip)} · vence {fmt(row.fecha_vencimiento)} ·{" "}
-                                {cuotaRestante > 0 ? `le falta ${fmtMonto(cuotaRestante)}` : "ya está cubierta"}
-                              </p>
+                              {/* 🔴 `cuotaRestante` NO es "lo que le falta": en una cuota con
+                                  saldo a favor vale el SOBRANTE (es |diferencia|), así que
+                                  decía "le falta $63" en una cuota que no necesita un peso.
+                                  Acá se pregunta por el estado, no por el número. El valor
+                                  en sí no se toca: lo usan los botones "Todo" (1.13). */}
+                              {/* La pastilla dice LA PLATA que hay para esta cuota cuando
+                                  la hay (es el número que se va a repartir); si no hay saldo,
+                                  dice qué le falta. */}
+                              <span className={`text-[10.5px] font-semibold tabular-nums whitespace-nowrap px-2 py-0.5 rounded-full border ${
+                                tieneSaldo
+                                  ? "bg-teal-50 text-teal-700 border-teal-200"
+                                  : pendiente || parcial
+                                    ? "bg-orange-50 text-orange-700 border-orange-200"
+                                    : "bg-gray-100 text-gray-600 border-gray-200"
+                              }`}>
+                                {tieneSaldo
+                                  ? fmtMonto(grupo!.total)
+                                  : pendiente || parcial ? `le falta ${fmtMonto(cuotaRestante)}` : "ya está cubierta"}
+                              </span>
                             </div>
+                            <div className="px-4 py-2.5 space-y-2">
                             {/* Por qué los botones de asociar pueden no estar. Se escribe
                                 arriba, no al apretar: el servidor también lo rechaza
                                 (409), pero enterarse antes es la diferencia. */}
                             {cerradaPorCartera && (
-                              <p className="text-[11px] text-amber-800">{ERROR_CERRADA_POR_CARTERA}</p>
+                              <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200/80 rounded-lg px-2 py-1.5">{ERROR_CERRADA_POR_CARTERA}</p>
                             )}
                             {!cerradaPorCartera && row.original_abierta && (
-                              <p className="text-[11px] text-amber-800">
+                              <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200/80 rounded-lg px-2 py-1.5">
                                 Esta es una línea de falta de pago y su cuota original sigue abierta: la plata
                                 se asocia en la original, o se pagaría dos veces la misma deuda.
                               </p>
@@ -2691,7 +2841,7 @@ export default function CarteraPreventivaView() {
                             <div className="flex flex-col gap-3">
                             {/* ── 1. Los pagos del documento con plata sin repartir ── */}
                             {ofrecePagos && (
-                            <div className="bg-white border border-amber-200/80 rounded-lg p-1.5 space-y-1">
+                            <div className="space-y-1">
                             {asociarLoading[row.cruce_access] ? (
                               <p className="text-xs text-gray-500">Cargando...</p>
                             ) : asociarError[row.cruce_access] ? (
@@ -2706,7 +2856,7 @@ export default function CarteraPreventivaView() {
                                     </p>
                                   ) : (
                                     <>
-                                      <p className="text-[11px] text-amber-800">
+                                      <p className="text-[11px] text-gray-500">
                                         {pagosDelDoc.length} pago(s) de este documento con plata sin repartir
                                       </p>
                                       {pagosDelDoc.map((pago) => {
@@ -2737,17 +2887,25 @@ export default function CarteraPreventivaView() {
                                         const montoValido = Number.isFinite(montoEnvio) && montoEnvio > 0
                                           && montoEnvio <= pago.restante + 0.01;
                                         return (
-                                          <div key={pago.matching_key} className="bg-white border border-gray-200 rounded-lg p-1.5 space-y-1">
-                                            <p className={`text-[11px] ${exacto ? "text-emerald-700 font-medium" : "text-gray-600"}`}>
-                                              {fmt(pago.transaction_code_1)} · {fmt(pago.payment_date)} · restante {fmtMonto(pago.restante)}
-                                              {exacto && " ✓ calza"}
-                                            </p>
-                                            {puedeAsociarPago && (
-                                              <div className="flex items-center gap-1 text-[11px]">
+                                          <div key={pago.matching_key} className="py-1.5 space-y-1 border-b border-dashed border-gray-200 last:border-b-0">
+                                            {/* El monto va A LA DERECHA y alineado: es la columna
+                                                que se compara de un vistazo cuando hay varios pagos.
+                                                Dentro del texto obliga a leer renglón por renglón. */}
+                                            <div className="flex items-baseline justify-between gap-2">
+                                              <p className="text-[11px] text-gray-600 truncate min-w-0">
+                                                {fmt(pago.transaction_code_1)} · {fmt(pago.payment_date)} · restante
+                                                {exacto && <span className="text-emerald-700 font-medium"> ✓ calza</span>}
+                                              </p>
+                                              <p className={`text-xs font-semibold tabular-nums shrink-0 ${exacto ? "text-emerald-700" : "text-gray-900"}`}>
+                                                {fmtMonto(pago.restante)}
+                                              </p>
+                                            </div>
+                                            <div className="flex items-center gap-1.5 text-[11px] pt-2 mt-1.5 border-t border-dashed border-gray-200">
+                                              {puedeAsociarPago && (<>
                                                 <button
                                                   onClick={() => handleAsociar(row, pago, montoTodo)}
                                                   disabled={savingAction}
-                                                  className="px-1.5 py-0.5 rounded bg-brand-700 text-white hover:bg-brand-800 disabled:opacity-50"
+                                                  className="px-2 py-1 rounded-lg bg-brand-700 text-white font-medium hover:bg-brand-800 disabled:opacity-50"
                                                 >
                                                   {cuotaRestante && cuotaRestante < pago.restante ? "Todo lo que falta" : "Todo"}
                                                 </button>
@@ -2758,7 +2916,7 @@ export default function CarteraPreventivaView() {
                                                   value={montoOtroValor[otroValorKey] || ""}
                                                   onChange={(e) => setMontoOtroValor((prev) => ({ ...prev, [otroValorKey]: e.target.value }))}
                                                   onBlur={(e) => setMontoOtroValor((prev) => ({ ...prev, [otroValorKey]: formatMonto(e.target.value) }))}
-                                                  className="w-24 border border-gray-300 rounded px-1 py-0.5"
+                                                  className="w-24 border border-gray-300 rounded-lg px-2 py-1"
                                                 />
                                                 <button
                                                   onClick={() => {
@@ -2766,23 +2924,22 @@ export default function CarteraPreventivaView() {
                                                     if (Number.isFinite(monto) && monto > 0) handleAsociar(row, pago, monto);
                                                   }}
                                                   disabled={savingAction}
-                                                  className="px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                                                  className="px-2 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
                                                 >
                                                   OK
                                                 </button>
-                                              </div>
-                                            )}
-                                            {/* Enviar a otro documento: un pago puede cubrir a dos
-                                                personas (una empresa por su empleado, un familiar
-                                                por otro). Va siempre, incluso donde no se puede
-                                                asociar — ahí suele ser la única salida. */}
-                                            <div className="pt-1 border-t border-gray-100">
+                                              </>)}
+                                              {/* Enviar a otro documento: un pago puede ser de dos
+                                                  personas (una empresa por su empleado, un familiar
+                                                  por otro). Va siempre, incluso donde no se puede
+                                                  asociar — ahí suele ser la única salida. */}
                                               <button
                                                 onClick={() => setEnviarOpen((prev) => ({ ...prev, [key]: !prev[key] }))}
-                                                className="text-[11px] px-1.5 py-0.5 rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50 active:scale-95 transition-all duration-200 ease-(--ease-spring)"
+                                                className="ml-auto px-2 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 active:scale-95 transition-all duration-200 ease-(--ease-spring)"
                                               >
-                                                {enviarOpen[key] ? "Ocultar envío" : "Enviar saldo a otro documento"}
+                                                {enviarOpen[key] ? "Ocultar envío" : "Enviar a otro doc."}
                                               </button>
+                                            </div>
                                               {enviarOpen[key] && (
                                                 <div className="animate-fade-in mt-1 space-y-1 bg-indigo-50/60 border border-indigo-200/80 rounded-lg p-1.5">
                                                   <div className="flex items-center gap-1">
@@ -2850,7 +3007,6 @@ export default function CarteraPreventivaView() {
                                                   )}
                                                 </div>
                                               )}
-                                            </div>
                                           </div>
                                         );
                                       })}
@@ -2871,14 +3027,11 @@ export default function CarteraPreventivaView() {
                             )}
                             {/* ── 2. Los saldos a favor del documento ──────────────── */}
                             {tieneSaldo && (
-                          <div className="bg-teal-50/60 border border-teal-200/80 rounded-lg p-1.5 space-y-1">
+                          <div className="space-y-1">
                             {/* Decía "Esta inscripción tiene un saldo a favor de X". Con
                                 el panel por cuota eso se lee como si el saldo fuera de la
                                 cuota de la fila, y no: es del DOCUMENTO (o del correo), y
                                 desde acá se le puede meter a ESTA cuota. */}
-                            <p className="text-[11px] text-teal-800">
-                              Saldo a favor del documento: {fmtMonto(grupo!.total)} en {grupo!.rows.length} fila(s)
-                            </p>
                             <div className="animate-fade-in space-y-1 pt-1">
                               {grupo!.rows.map((saldo) => {
                                   const otroKey = `saldo:${saldo.id}:${row.llave}`;
@@ -2902,10 +3055,20 @@ export default function CarteraPreventivaView() {
                                   const montoValido = Number.isFinite(montoEnvio) && montoEnvio > 0
                                     && montoEnvio <= Number(saldo.disponible) + 0.01;
                                   return (
-                                    <div key={saldo.id} className="bg-white border border-gray-200 rounded-lg p-1.5 space-y-1">
-                                      <p className="text-[11px] text-gray-600">
-                                        {fmt(saldo.cliente)} · {fmt(saldo.fecha)} · disponible {fmtMonto(saldo.disponible)}
-                                      </p>
+                                    <div key={saldo.id} className="py-1.5 space-y-1 border-b border-dashed border-gray-200 last:border-b-0">
+                                      <div className="flex items-baseline justify-between gap-2">
+                                        <div className="min-w-0">
+                                          {/* "del documento", no "de la cuota": el saldo es de la
+                                              persona y desde acá se le mete a ESTA cuota. */}
+                                          <p className="text-[11px] text-gray-900">Saldo del documento</p>
+                                          <p className="text-[10.5px] text-gray-500 truncate">
+                                            {fmt(saldo.cliente)} · {fmt(saldo.fecha)} · disponible
+                                          </p>
+                                        </div>
+                                        <p className="text-xs font-semibold tabular-nums text-gray-900 shrink-0">
+                                          {fmtMonto(saldo.disponible)}
+                                        </p>
+                                      </div>
                                       {/* Un envío se puede deshacer SOLO mientras nadie lo haya
                                           asociado: si ya se usó una parte, la plata está en una
                                           cuota y el camino es "Descartar pago" allá. El servidor
@@ -2932,12 +3095,14 @@ export default function CarteraPreventivaView() {
                                           original abierta. Enviar a otra persona va siempre: el
                                           caso normal es una cuota ya pagada cuyo sobrante es de
                                           otra cédula. */}
-                                      {puedeAsociarSaldo && (
-                                        <div className="flex items-center gap-1 text-[11px]">
+                                      {/* Una sola fila: asociar acá y mandar a otra persona son
+                                          los dos caminos de esta plata y se eligen a la vez. */}
+                                      <div className="flex items-center gap-1.5 text-[11px] pt-2 mt-1.5 border-t border-dashed border-gray-200">
+                                        {puedeAsociarSaldo && (<>
                                           <button
                                             onClick={() => handleAsociarSaldo(row, saldo, montoTodo)}
                                             disabled={savingAction}
-                                            className="px-1.5 py-0.5 rounded bg-teal-700 text-white hover:bg-teal-800 disabled:opacity-50"
+                                            className="px-2 py-1 rounded-lg bg-brand-700 text-white font-medium hover:bg-brand-800 disabled:opacity-50"
                                           >
                                             {cuotaRestante && cuotaRestante < saldo.disponible ? "Todo lo que falta" : "Todo"}
                                           </button>
@@ -2948,7 +3113,7 @@ export default function CarteraPreventivaView() {
                                             value={saldoOtroValor[otroKey] || ""}
                                             onChange={(e) => setSaldoOtroValor((prev) => ({ ...prev, [otroKey]: e.target.value }))}
                                             onBlur={(e) => setSaldoOtroValor((prev) => ({ ...prev, [otroKey]: formatMonto(e.target.value) }))}
-                                            className="w-24 border border-gray-300 rounded px-1 py-0.5"
+                                            className="w-24 border border-gray-300 rounded-lg px-2 py-1"
                                           />
                                           <button
                                             onClick={() => {
@@ -2956,19 +3121,18 @@ export default function CarteraPreventivaView() {
                                               if (Number.isFinite(monto) && monto > 0) handleAsociarSaldo(row, saldo, monto);
                                             }}
                                             disabled={savingAction}
-                                            className="px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                                            className="px-2 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
                                           >
                                             OK
                                           </button>
-                                        </div>
-                                      )}
-                                      <div className="pt-1 border-t border-gray-100">
+                                        </>)}
                                         <button
                                           onClick={() => setEnviarOpen((prev) => ({ ...prev, [envKey]: !prev[envKey] }))}
-                                          className="text-[11px] px-1.5 py-0.5 rounded border border-indigo-300 text-indigo-700 hover:bg-indigo-50 active:scale-95 transition-all duration-200 ease-(--ease-spring)"
+                                          className="ml-auto px-2 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 active:scale-95 transition-all duration-200 ease-(--ease-spring)"
                                         >
-                                          {enviarOpen[envKey] ? "Ocultar envío" : "Enviar a otro documento"}
+                                          {enviarOpen[envKey] ? "Ocultar envío" : "Enviar a otro doc."}
                                         </button>
+                                      </div>
                                         {enviarOpen[envKey] && (
                                           <div className="animate-fade-in mt-1 space-y-1 bg-indigo-50/60 border border-indigo-200/80 rounded-lg p-1.5">
                                             <div className="flex items-center gap-1">
@@ -3038,13 +3202,13 @@ export default function CarteraPreventivaView() {
                                             )}
                                           </div>
                                         )}
-                                      </div>
                                     </div>
                                   );
                               })}
                             </div>
                           </div>
                             )}
+                            </div>
                             </div>
                           </div>
                         )}
@@ -3079,6 +3243,25 @@ export default function CarteraPreventivaView() {
                         )}
               </div>
             </div>
+            {/* 🔴 Las acciones viven en un PIE FIJO, fuera del cuerpo que
+                desplaza: son el final del trabajo y en una cuota con cronología
+                larga quedaban debajo de todo. El pie solo existe si hay algo que
+                apretar — una cuota sin acciones no muestra una barra vacía. */}
+            {acciones.length > 0 && (
+              <div className="shrink-0 border-t border-black/[0.06] bg-white px-4 py-2.5 flex flex-wrap gap-1.5">
+                {acciones.map((accion) => (
+                  <button
+                    key={accion.key}
+                    onClick={accion.onClick}
+                    disabled={saving}
+                    title={accion.title}
+                    className={`text-xs px-2.5 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-50 active:scale-95 transition-all duration-200 ease-(--ease-spring) disabled:opacity-50 ${accion.className}`}
+                  >
+                    {accion.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </>
         );
       })()}
