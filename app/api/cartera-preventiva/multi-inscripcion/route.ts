@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { LIKE_PAGO_SIN_APLICAR, esPagoSinAplicar } from "@/lib/pagoSinAplicar";
+import { fetchCerradasManual } from "@/lib/cerradasManual";
 
 // Panel de asociación manual (§4.1): solo debe ofrecerse cuando un documento
 // (cruce_access) tiene 2+ INSCRIPCIONES DISTINTAS con cuota pendiente — no
@@ -34,6 +35,19 @@ export async function GET(req: NextRequest) {
   if (response) return response;
 
   const supabase = createAdminClient();
+
+  // TERCERA condición (2026-10-02): una cuota cerrada a mano no cuenta como
+  // pendiente, por ninguno de los dos caminos. El cierre por Cartera vive en
+  // `cartera_preventiva_overrides` y lo aplica el pipeline, así que durante el
+  // reproceso la fila sigue con `fecha_pago` en NULL y el `.or()` de abajo la trae
+  // como si estuviera abierta — el botón "Asociar" aparecería para un documento
+  // cuyas únicas cuotas "abiertas" son, en realidad, cuotas que alguien acaba de
+  // cerrar, y el panel abriría sin un solo destino válido (porque GET /asociar sí
+  // las excluye). Se piden TODAS las cerradas (hoy 27): este endpoint recorre la
+  // cartera entera, no tiene una lista de llaves a la que preguntar.
+  const { cerradas, error: cerrError } = await fetchCerradasManual(supabase);
+  if (cerrError) return NextResponse.json({ error: cerrError }, { status: 500 });
+
   const BATCH = 1000;
   let from = 0;
   const porDocumento = new Map<string, Set<string>>();
@@ -42,7 +56,9 @@ export async function GET(req: NextRequest) {
   while (true) {
     const { data, error } = await supabase
       .from("cartera_preventiva")
-      .select("cruce_access, inscrip, fecha_pago, notificacion")
+      // `llave` es nueva en el select: es con lo que se descartan las cerradas a
+      // mano (los overrides van keyed por llave, no por inscripción).
+      .select("llave, cruce_access, inscrip, fecha_pago, notificacion")
       // ⚠️ El `.is("fecha_pago", null)` de siempre deja fuera justamente las cuotas
       // del segundo camino: una cuota corta SÍ tiene fecha_pago (recibió el primer
       // pago). Sin ampliarlo acá, el cambio no hace nada y parece implementado.
@@ -63,6 +79,12 @@ export async function GET(req: NextRequest) {
 
     for (const row of data) {
       const doc = row.cruce_access as string;
+      // Fuera de los dos caminos, no solo del primero: si la única cuota con el
+      // aviso `PAGO SIN APLICAR` de un documento está cerrada a mano, tampoco hay
+      // dónde poner la plata. ⚠️ Lo que NO se toca es la cuota del aviso en sí:
+      // esa tiene `fecha_pago` y es un destino válido (21/08). La exclusión es
+      // solo por `cerrado_manual`.
+      if (cerradas.has(row.llave as string)) continue;
       // El primer camino sigue contando SOLO cuotas pendientes. Si se contaran
       // también las del aviso (que ya tienen fecha_pago), un documento podría
       // llegar a "2+ inscripciones" sumando una que ya está pagada, y el botón

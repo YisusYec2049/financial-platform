@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { fetchCerradasManual, ERROR_CERRADA_POR_CARTERA } from "@/lib/cerradasManual";
 
 // Regla #7 (Spec Auto Cartera): asociar un saldo a favor (cartera_saldos_favor,
 // ya no se auto-aplica) a una cuota destino elegida a mano. Escribe
@@ -32,6 +33,18 @@ export async function POST(req: NextRequest) {
   }
 
   const supabase = createAdminClient();
+
+  // La cuota destino no puede estar declarada pagada por Cartera (2 de octubre).
+  // Es la OTRA puerta por la que entra plata a una cuota, y hasta hoy no validaba
+  // nada del destino: `asociar_saldo()` solo mira el saldo. Va ANTES de la llamada
+  // a la función, porque adentro la escritura ya es una sola transacción y
+  // revertirla no es una opción. La señal es el override, no la fila: entre el
+  // clic del cierre y el final del reproceso la cuota todavía se ve pendiente.
+  const { cerradas, error: cerrError } = await fetchCerradasManual(supabase, [llave]);
+  if (cerrError) return NextResponse.json({ error: cerrError }, { status: 500 });
+  if (cerradas.has(llave)) {
+    return NextResponse.json({ error: ERROR_CERRADA_POR_CARTERA }, { status: 409 });
+  }
 
   // Validar, vincular y descontar: o pasan las tres o no pasa ninguna. Las
   // validaciones viven dentro de la función, donde no se pueden esquivar.

@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { fetchSellados } from "@/lib/sellados";
+import { fetchCerradasManual, ERROR_CERRADA_POR_CARTERA } from "@/lib/cerradasManual";
 import { LIKE_PAGO_SIN_APLICAR } from "@/lib/pagoSinAplicar";
 
 // Cuánto le queda a un pago por repartir. La plata de un pago vive en TRES sitios,
@@ -113,6 +114,20 @@ export async function GET(req: NextRequest) {
     .or(`fecha_pago.is.null,notificacion.like.${LIKE_PAGO_SIN_APLICAR}`);
   if (insError) return NextResponse.json({ error: insError.message }, { status: 500 });
 
+  // ⚠️ Y fuera las cuotas que alguien acaba de declarar "pagada por Cartera". El
+  // filtro de arriba no las ve: el cierre vive en `cartera_preventiva_overrides` y
+  // lo aplica el pipeline, así que hasta que termine el reproceso la cuota sigue
+  // con `fecha_pago` en NULL y entra en la lista como cualquier otra pendiente.
+  // Es el caso del 2 de octubre (doc `1099208759`, 29 segundos entre el cierre y
+  // la asociación): la misma cuota cobrada por Cartera y comiéndose un pago de
+  // $1.040.000. La señal es el override, nunca la fila.
+  const { cerradas, error: cerrError } = await fetchCerradasManual(
+    supabase,
+    (inscripciones || []).map((i) => i.llave as string),
+  );
+  if (cerrError) return NextResponse.json({ error: cerrError }, { status: 500 });
+  const destinos = (inscripciones || []).filter((i) => !cerradas.has(i.llave as string));
+
   const { data: pagos, error: pagosError } = await supabase
     .from("consolidated_transactions")
     .select("matching_key, payment_amount, payment_date, transaction_code_1")
@@ -143,7 +158,7 @@ export async function GET(req: NextRequest) {
     }))
     .filter((p) => p.restante > 0);
 
-  return NextResponse.json({ inscripciones: inscripciones || [], pagos: pagosConRestante });
+  return NextResponse.json({ inscripciones: destinos, pagos: pagosConRestante });
 }
 
 export async function POST(req: NextRequest) {
@@ -183,6 +198,16 @@ export async function POST(req: NextRequest) {
       { error: `Este pago ya cerró su ventana de aplicación (sellado el ${selladoAt}) y no se puede asociar.` },
       { status: 409 },
     );
+  }
+
+  // Y la cuota DESTINO: si ya está declarada pagada por Cartera, no recibe plata.
+  // 🔴 Filtrar la lista del GET no alcanza — es la lección del 12 de agosto: la
+  // pantalla puede llevar minutos abierta, y el cierre puede haber ocurrido en otra
+  // pestaña entre que se pintó el panel y que se apretó Guardar.
+  const { cerradas, error: cerrError } = await fetchCerradasManual(supabase, [llave]);
+  if (cerrError) return NextResponse.json({ error: cerrError }, { status: 500 });
+  if (cerradas.has(llave)) {
+    return NextResponse.json({ error: ERROR_CERRADA_POR_CARTERA }, { status: 409 });
   }
 
   const { restante: comprometido, error: compError } = await restantePorPago(supabase, [matchingKey]);
