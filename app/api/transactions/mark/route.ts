@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
+import { fetchMotivos, huellaMotivo, normalizarMotivo } from "@/lib/apartados";
 
 const TIPOS_MARCABLES = ["matricula", "cesantias", "otros"] as const;
 
@@ -25,6 +26,39 @@ export async function POST(req: NextRequest) {
   }
 
   const supabase = createAdminClient();
+
+  // El motivo de "Otros" es una CATEGORÍA, no un comentario: se guarda con el
+  // nombre del catálogo, y si es nuevo entra al catálogo acá mismo.
+  //
+  // 🔴 La normalización y el reuso por huella van también en esta ruta, no solo
+  // en el desplegable: si alguien escribe "certificado." —o llama la ruta por su
+  // cuenta— tiene que terminar en el "Certificado" que ya existe. Es el defecto
+  // que tenía el campo libre, donde esa palabra entró de NUEVE formas y el filtro
+  // no servía para nada.
+  let motivo: string | null = null;
+  if (tipo === "otros") {
+    motivo = normalizarMotivo(nota as string).slice(0, 60);
+    if (!motivo) {
+      return NextResponse.json({ error: "El motivo es requerido para apartar como \"Otros\"" }, { status: 400 });
+    }
+    const { motivos, catalogoDisponible, error: errMotivos } = await fetchMotivos(supabase);
+    if (errMotivos) return NextResponse.json({ error: errMotivos }, { status: 500 });
+
+    // Si ya existe uno con la misma huella, manda el nombre que ya está escrito
+    // en los demás pagos: así "certificado." no abre una segunda categoría.
+    const huella = huellaMotivo(motivo);
+    const existente = motivos.find((m) => huellaMotivo(m.nombre) === huella);
+    if (existente) motivo = existente.nombre;
+
+    // ⚠️ Meterlo al catálogo es best-effort: lo que importa es que el pago quede
+    // apartado. Si esto falla, el motivo igual queda guardado en el pago y la
+    // lista lo sigue ofreciendo (viene de los que están en uso).
+    if (catalogoDisponible && !existente?.enCatalogo) {
+      await supabase
+        .from("apartados_motivos")
+        .upsert({ nombre: motivo, activo: true, created_by: user.email ?? "unknown" }, { onConflict: "nombre" });
+    }
+  }
 
   const { data: tx, error: txError } = await supabase
     .from("consolidated_transactions")
@@ -56,7 +90,7 @@ export async function POST(req: NextRequest) {
       program: tx.program,
       phone: tx.phone,
       payment_amount: tx.payment_amount,
-      nota,
+      nota: tipo === "otros" ? motivo : nota,
     }, { onConflict: "matching_key" });
 
   if (upsertError) return NextResponse.json({ error: upsertError.message }, { status: 500 });

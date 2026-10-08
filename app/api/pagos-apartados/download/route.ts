@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sanitizeSearch } from "@/lib/search";
+import { partirCategoria } from "@/lib/apartados";
 
 export async function GET(req: NextRequest) {
   const { user, response } = await requireAuth(req);
@@ -10,7 +11,7 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
   const search  = sanitizeSearch(searchParams.get("search"));
-  const tipo    = searchParams.get("tipo")?.slice(0, 50) || "";
+  const tipo    = searchParams.get("tipo")?.slice(0, 80) || "";
   const regFrom = searchParams.get("reg_from") || "";
   const regTo   = searchParams.get("reg_to") || "";
 
@@ -39,7 +40,13 @@ export async function GET(req: NextRequest) {
         `identification.ilike.%${search}%,transaction_code_1.ilike.%${search}%,email.ilike.%${search}%,nota.ilike.%${search}%,matching_key.ilike.%${search}%`
       );
     }
-    if (tipo) query = query.eq("tipo", tipo);
+    if (tipo) {
+      // El filtro puede venir como `otros:Certificado`: ahí el motivo es parte de
+      // la categoría y se compara contra `nota`.
+      const { tipo: tipoBase, motivo } = partirCategoria(tipo);
+      query = query.eq("tipo", tipoBase);
+      if (motivo) query = query.eq("nota", motivo);
+    }
     if (regFrom) query = query.gte("fecha_ingreso", regFrom);
     if (regTo)   query = query.lte("fecha_ingreso", regTo);
 

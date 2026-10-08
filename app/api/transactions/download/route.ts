@@ -3,6 +3,9 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { requireAuth } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { sanitizeSearch } from "@/lib/search";
+import { categoriaDe, coincideCategoria, etiquetaCategoria, fetchApartados } from "@/lib/apartados";
+
+type Fila = Record<string, unknown>;
 
 export async function GET(req: NextRequest) {
   // Autenticación
@@ -20,67 +23,92 @@ export async function GET(req: NextRequest) {
 
   const supabase = createAdminClient();
 
-  let categoriaKeys: string[] | null = null;
-  if (categoria) {
-    const { data: apartados } = await supabase.from("pagos_apartados").select("matching_key, tipo");
-    if (categoria === "normal") {
-      categoriaKeys = (apartados || []).map((a) => a.matching_key);
-    } else {
-      categoriaKeys = (apartados || []).filter((a) => a.tipo === categoria).map((a) => a.matching_key);
-      if (categoriaKeys.length === 0) {
-        return NextResponse.json({ data: [], count: 0, truncated: false });
-      }
-    }
-  }
-
   const MAX_ROWS = 50_000;
   const BATCH = 1000;
-  let allData: Record<string, unknown>[] = [];
-  let from = 0;
 
-  while (allData.length < MAX_ROWS) {
-    const remaining = MAX_ROWS - allData.length;
-    const batchSize = Math.min(BATCH, remaining);
+  // Los filtros que SÍ puede aplicar la base, en una función: el de categoría se
+  // resuelve en JS (ver abajo) y hay que rearmar la consulta una vez por lote.
+  const base = () => {
+    let q = supabase.from("consolidated_transactions").select("*");
 
-    let query = supabase
-      .from("consolidated_transactions")
-      .select("*")
+    if (search) {
+      q = q.or(
+        `identification.ilike.%${search}%,transaction_code_1.ilike.%${search}%,email.ilike.%${search}%,matching_key.ilike.%${search}%`
+      );
+    }
+    if (paymentMethod) {
+      q = paymentMethod.endsWith("%")
+        ? q.ilike("payment_method", paymentMethod)
+        : q.eq("payment_method", paymentMethod);
+    }
+    if (regFrom) q = q.gte("registration_date", regFrom);
+    if (regTo)   q = q.lte("registration_date", regTo);
+    if (payFrom) q = q.gte("payment_date", payFrom);
+    if (payTo)   q = q.lte("payment_date", payTo);
+
+    return q
       .order("registration_date", { ascending: false })
       // Desempate obligatorio (ver cartera-preventiva/download): sin columna única
       // al final del orden, el corte entre lotes pierde filas en silencio. Hoy esta
       // descarga entrega el total exacto, pero por cómo caen los empates, no porque
       // esté sana. `id` es la PK.
-      .order("id", { ascending: true })
-      .range(from, from + batchSize - 1);
+      .order("id", { ascending: true });
+  };
 
-    if (categoria === "normal" && categoriaKeys && categoriaKeys.length > 0) {
-      query = query.not("matching_key", "in", `(${categoriaKeys.map((k) => `"${k}"`).join(",")})`);
-    } else if (categoria && categoria !== "normal" && categoriaKeys) {
-      query = query.in("matching_key", categoriaKeys);
-    }
+  // El mapa de apartados va paginado (lib/apartados.ts): con el `select` suelto
+  // esta descarga repetía las dos mentiras de la pantalla — apartados contados
+  // como normales, y la lista por tipo incompleta. Se pide SIEMPRE, no solo al
+  // filtrar, porque ahora el archivo también dice la categoría de cada fila.
+  const { apartados, error: errApartados } = await fetchApartados(supabase);
+  if (errApartados) return NextResponse.json({ error: errApartados }, { status: 500 });
 
-    if (search) {
-      query = query.or(
-        `identification.ilike.%${search}%,transaction_code_1.ilike.%${search}%,email.ilike.%${search}%,matching_key.ilike.%${search}%`
+  let allData: Fila[] = [];
+
+  if (categoria) {
+    // 🔴 La condición de categoría NO puede viajar en la URL: se arma con todas las
+    // llaves apartadas y el gateway responde "Bad Request" cuando la URL se pasa de
+    // largo (medido el 8/10/2026: el corte está entre 800 y 1.082 llaves, así que
+    // hoy ya fallan "Normal" con 1.477 y "Matrícula" con 1.082). Mismo criterio que
+    // la lista, para que la descarga no diga otra cosa que la pantalla.
+    if (categoria === "normal") {
+      for (let from = 0; allData.length < MAX_ROWS; from += BATCH) {
+        const { data, error } = await base().range(from, from + BATCH - 1);
+        if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+        for (const row of (data ?? []) as Fila[]) {
+          if (!apartados.has(row.matching_key as string)) allData.push(row);
+        }
+        if (!data || data.length < BATCH) break;
+      }
+    } else {
+      const llaves = [...apartados.entries()]
+        .filter(([, a]) => coincideCategoria(categoriaDe(a), categoria))
+        .map(([k]) => k);
+      // 300 por lote: con 800 ya se roza el tope de URL, y una llave que no entra en
+      // la consulta se leería como "este pago no es de esta categoría".
+      for (let i = 0; i < llaves.length && allData.length < MAX_ROWS; i += 300) {
+        const { data, error } = await base().in("matching_key", llaves.slice(i, i + 300));
+        if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+        allData.push(...((data ?? []) as Fila[]));
+      }
+      // Los lotes vienen ordenados por dentro pero no entre sí. Comparación cruda:
+      // `localeCompare` ignora los guiones de los UUID en algunas locales.
+      const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+      allData.sort(
+        (a, b) =>
+          cmp(String(b.registration_date), String(a.registration_date)) ||
+          cmp(String(a.id), String(b.id))
       );
     }
-    if (paymentMethod) {
-      query = paymentMethod.endsWith("%")
-        ? query.ilike("payment_method", paymentMethod)
-        : query.eq("payment_method", paymentMethod);
+    allData = allData.slice(0, MAX_ROWS);
+  } else {
+    for (let from = 0; allData.length < MAX_ROWS; from += BATCH) {
+      const batchSize = Math.min(BATCH, MAX_ROWS - allData.length);
+      const { data, error } = await base().range(from, from + batchSize - 1);
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      if (!data || data.length === 0) break;
+      allData = allData.concat(data as Fila[]);
+      if (data.length < batchSize) break;
     }
-    if (regFrom) query = query.gte("registration_date", regFrom);
-    if (regTo)   query = query.lte("registration_date", regTo);
-    if (payFrom) query = query.gte("payment_date", payFrom);
-    if (payTo)   query = query.lte("payment_date", payTo);
-
-    const { data, error } = await query;
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    if (!data || data.length === 0) break;
-
-    allData = allData.concat(data);
-    if (data.length < batchSize) break;
-    from += batchSize;
   }
 
   const truncated = allData.length >= MAX_ROWS;
@@ -100,5 +128,22 @@ export async function GET(req: NextRequest) {
     result_count: deduped.length,
   });
 
-  return NextResponse.json({ data: deduped, count: deduped.length, truncated });
+  // La categoría va EN EL ARCHIVO, no solo en el filtro: hasta hoy se podía bajar
+  // "solo los certificados" y el Excel no decía de qué categoría era ninguna fila
+  // (`json_to_sheet` vuelca las filas crudas de la tabla).
+  //
+  // 🔴 Las dos columnas van AL FINAL. El área tiene fórmulas que apuntan a la
+  // LETRA de la columna, no al título (invariante 6.9): meterlas al principio le
+  // correría una letra a todo lo de la derecha. Y el CSV arma sus encabezados con
+  // `Object.keys(rows[0])`, así que con esto salen en los dos formatos.
+  const conCategoria = deduped.map((row) => {
+    const a = apartados.get(row.matching_key as string);
+    return {
+      ...row,
+      categoria: etiquetaCategoria(a?.tipo ?? "normal", a?.nota),
+      motivo: a?.tipo === "otros" ? (a.nota ?? "") : "",
+    };
+  });
+
+  return NextResponse.json({ data: conCategoria, count: conCategoria.length, truncated });
 }

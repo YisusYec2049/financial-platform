@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
 import { useSessionState } from "@/lib/useSessionState";
 import { useReproceso } from "@/lib/useReproceso";
+import { etiquetaCategoria } from "@/lib/apartados";
 
 type PagoApartadoRow = {
   matching_key: string;
@@ -27,15 +28,6 @@ type PagoApartadoRow = {
   nota: string | null;
 };
 
-const TIPO_LABEL: Record<string, string> = {
-  matricula: "Matrícula",
-  cesantias: "Cesantías",
-  pago_llave: "Pago por llave",
-  numeros_uc: "Números de UC",
-  cheque: "Cheque",
-  otros: "Otros",
-};
-
 const TIPO_BADGE: Record<string, string> = {
   matricula: "bg-brand-50 text-brand-700",
   cesantias: "bg-emerald-50 text-emerald-700",
@@ -55,6 +47,9 @@ export default function PagosApartadosView() {
   const [regFrom, setRegFrom]       = useSessionState("pagos_apartados.regFrom", "");
   const [regTo, setRegTo]           = useSessionState("pagos_apartados.regTo", "");
   const [fetchError, setFetchError] = useState("");
+  // Los motivos de "Otros", para ofrecerlos en el filtro igual que en el
+  // Consolidado (la lista sale del catálogo + los que ya están en uso).
+  const [motivos, setMotivos]       = useState<{ nombre: string; usos: number }[]>([]);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [edits, setEdits]           = useState<Record<string, string>>({});
   const [rowError, setRowError]     = useState<Record<string, string>>({});
@@ -95,6 +90,18 @@ export default function PagosApartadosView() {
       setLoading(false);
     }
   }, [search, tipo, regFrom, regTo]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res  = await fetch("/api/pagos-apartados/motivos");
+        const json = await res.json();
+        if (res.ok) setMotivos(json.data ?? []);
+      } catch {
+        // falla silenciosa: el filtro se queda con los 6 tipos de siempre
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     if (searchTimeout.current) clearTimeout(searchTimeout.current);
@@ -290,7 +297,16 @@ export default function PagosApartadosView() {
             <option value="pago_llave" className="text-gray-900">Pago por llave</option>
             <option value="numeros_uc" className="text-gray-900">Números de UC</option>
             <option value="cheque" className="text-gray-900">Cheque</option>
-            <option value="otros" className="text-gray-900">Otros</option>
+            <option value="otros" className="text-gray-900">Otros (todos los motivos)</option>
+            {motivos.length > 0 && (
+              <optgroup label="Motivos de Otros">
+                {motivos.map((m) => (
+                  <option key={m.nombre} value={`otros:${m.nombre}`} className="text-gray-900">
+                    {m.nombre}{m.usos > 0 ? ` (${m.usos})` : ""}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </div>
 
@@ -410,7 +426,9 @@ export default function PagosApartadosView() {
                         <td className="px-4 py-2.5">
                           <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${TIPO_BADGE[row.tipo] ?? "bg-gray-100 text-gray-700"}`}>
                             {isCheque && <span title="Cheque">🏦</span>}
-                            {TIPO_LABEL[row.tipo] ?? row.tipo}
+                            {/* El motivo es parte de la categoría, no solo la
+                                columna Nota del final. */}
+                            {etiquetaCategoria(row.tipo, row.nota)}
                           </span>
                         </td>
                         <td className="px-4 py-2.5 text-gray-700 whitespace-nowrap">{fmt(row.origen)}</td>

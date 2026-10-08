@@ -7,6 +7,7 @@ import { useSessionState } from "@/lib/useSessionState";
 import { useReproceso } from "@/lib/useReproceso";
 import { useDocumentHistory } from "@/lib/useDocumentHistory";
 import DocumentHistoryHint from "@/components/DocumentHistoryHint";
+import { etiquetaCategoria } from "@/lib/apartados";
 
 type Transaction = {
   id: string;
@@ -23,18 +24,9 @@ type Transaction = {
   matching_key: string;
   incp: string;
   categoria: string;
+  motivo: string | null;
   alerta_documento_repetido: boolean;
   alerta_posible_doble_cobro: boolean;
-};
-
-const CATEGORIA_LABEL: Record<string, string> = {
-  normal: "Normal",
-  matricula: "Matrícula",
-  cesantias: "Cesantías",
-  pago_llave: "Pago por llave",
-  numeros_uc: "Números de UC",
-  cheque: "Cheque",
-  otros: "Otros",
 };
 
 const CATEGORIA_BADGE: Record<string, string> = {
@@ -75,6 +67,11 @@ export default function TransactionsView() {
   const [removePatternOffer, setRemovePatternOffer] = useState<Record<string, string>>({});
   const [otrosPanelOpen, setOtrosPanelOpen]     = useState<Record<string, boolean>>({});
   const [otrosNota, setOtrosNota]               = useState<Record<string, string>>({});
+  // El catálogo de motivos de "Otros". Se pide una vez al montar y se refresca
+  // cuando alguien crea uno, para que aparezca en el desplegable y en el filtro
+  // sin recargar la página.
+  const [motivos, setMotivos]                   = useState<{ nombre: string; usos: number }[]>([]);
+  const [motivoNuevo, setMotivoNuevo]           = useState<Record<string, boolean>>({});
   const dropdownRef                       = useRef<HTMLDivElement>(null);
   const searchTimeout                     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef                = useRef<AbortController | null>(null);
@@ -143,6 +140,22 @@ export default function TransactionsView() {
   useEffect(() => {
     fetchMethods();
   }, [fetchMethods]);
+
+  const cargarMotivos = useCallback(async () => {
+    try {
+      const res  = await fetch("/api/pagos-apartados/motivos");
+      const json = await res.json();
+      if (res.ok) setMotivos(json.data ?? []);
+    } catch {
+      // falla silenciosa: sin catálogo el panel deja escribir el motivo igual
+    }
+  }, []);
+
+  // IIFE async adentro: el lint rechaza llamar desde el cuerpo del efecto a una
+  // función que hace setState, aunque el setState vaya después de un await.
+  useEffect(() => {
+    (async () => { await cargarMotivos(); })();
+  }, [cargarMotivos]);
 
   useEffect(() => {
     if (searchTimeout.current) clearTimeout(searchTimeout.current);
@@ -311,9 +324,17 @@ export default function TransactionsView() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Error al marcar");
-      setData((prev) => prev.map((r) => r.matching_key === row.matching_key ? { ...r, categoria: tipo } : r));
+      setData((prev) => prev.map((r) => r.matching_key === row.matching_key
+        ? { ...r, categoria: tipo, motivo: tipo === "otros" ? (nota ?? null) : null }
+        : r));
       setRowMessage((prev) => ({ ...prev, [row.matching_key]: "Marcado. Sale del proceso en el próximo cruce." }));
       setOtrosPanelOpen((prev) => ({ ...prev, [row.matching_key]: false }));
+      if (tipo === "otros") {
+        // El motivo pudo ser nuevo: que aparezca en el desplegable y en el filtro
+        // sin recargar.
+        setMotivoNuevo((prev) => ({ ...prev, [row.matching_key]: false }));
+        cargarMotivos();
+      }
       // Acción sobre UN pago → reproceso puntual (spec "Reproceso de un solo pago").
       fireTrigger(row.matching_key, { matchingKey: row.matching_key });
     } catch (err) {
@@ -552,7 +573,16 @@ export default function TransactionsView() {
             <option value="pago_llave" className="text-gray-900">Pago por llave</option>
             <option value="numeros_uc" className="text-gray-900">Números de UC</option>
             <option value="cheque" className="text-gray-900">Cheque</option>
-            <option value="otros" className="text-gray-900">Otros</option>
+            <option value="otros" className="text-gray-900">Otros (todos los motivos)</option>
+            {motivos.length > 0 && (
+              <optgroup label="Motivos de Otros">
+                {motivos.map((m) => (
+                  <option key={m.nombre} value={`otros:${m.nombre}`} className="text-gray-900">
+                    {m.nombre}{m.usos > 0 ? ` (${m.usos})` : ""}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </div>
 
@@ -734,7 +764,9 @@ export default function TransactionsView() {
                     </td>
                     <td className="px-4 py-2.5">
                       <span className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${CATEGORIA_BADGE[row.categoria] ?? "bg-gray-100 text-gray-600"}`}>
-                        {CATEGORIA_LABEL[row.categoria] ?? row.categoria}
+                        {/* El motivo es parte de la categoría: un pago de "Otros"
+                            sin él se leía igual que los otros 110. */}
+                        {etiquetaCategoria(row.categoria, row.motivo)}
                       </span>
                     </td>
                     <td className="px-4 py-2.5">
@@ -776,14 +808,59 @@ export default function TransactionsView() {
                             {otrosPanelOpen[row.matching_key] && (
                               <div className="animate-fade-in bg-slate-50 border border-slate-200 rounded-lg p-2 space-y-1.5 w-56">
                                 <label className="block text-[11px] text-gray-500">Motivo</label>
-                                <input
-                                  type="text"
-                                  value={otrosNota[row.matching_key] ?? ""}
-                                  onChange={(e) => setOtrosNota((prev) => ({ ...prev, [row.matching_key]: e.target.value }))}
-                                  disabled={saving}
-                                  placeholder="¿Por qué se aparta?"
-                                  className="w-full border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500/50"
-                                />
+                                {/* 🔴 Se ELIGE de la lista; escribir es la excepción.
+                                    Con el campo libre, "Certificado" entró de nueve
+                                    formas distintas (63 pagos) y el filtro no servía
+                                    para nada. */}
+                                {!motivoNuevo[row.matching_key] && motivos.length > 0 ? (
+                                  <select
+                                    value={otrosNota[row.matching_key] ?? ""}
+                                    onChange={(e) => {
+                                      if (e.target.value === "__nuevo__") {
+                                        setMotivoNuevo((prev) => ({ ...prev, [row.matching_key]: true }));
+                                        setOtrosNota((prev) => ({ ...prev, [row.matching_key]: "" }));
+                                      } else {
+                                        setOtrosNota((prev) => ({ ...prev, [row.matching_key]: e.target.value }));
+                                      }
+                                    }}
+                                    disabled={saving}
+                                    className="w-full border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500/50"
+                                  >
+                                    <option value="" className="text-gray-900">Elegir motivo…</option>
+                                    {motivos.map((m) => (
+                                      <option key={m.nombre} value={m.nombre} className="text-gray-900">
+                                        {m.nombre}{m.usos > 0 ? ` (${m.usos})` : ""}
+                                      </option>
+                                    ))}
+                                    <option value="__nuevo__" className="text-gray-900">➕ Crear motivo nuevo…</option>
+                                  </select>
+                                ) : (
+                                  <>
+                                    <input
+                                      type="text"
+                                      value={otrosNota[row.matching_key] ?? ""}
+                                      onChange={(e) => setOtrosNota((prev) => ({ ...prev, [row.matching_key]: e.target.value }))}
+                                      disabled={saving}
+                                      placeholder="Nombre del motivo nuevo"
+                                      autoFocus
+                                      className="w-full border border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500/50"
+                                    />
+                                    <p className="text-[10px] text-gray-500">
+                                      Queda guardado como categoría y se podrá elegir después.
+                                    </p>
+                                    {motivos.length > 0 && (
+                                      <button
+                                        onClick={() => {
+                                          setMotivoNuevo((prev) => ({ ...prev, [row.matching_key]: false }));
+                                          setOtrosNota((prev) => ({ ...prev, [row.matching_key]: "" }));
+                                        }}
+                                        className="text-[11px] text-gray-500 hover:text-gray-700 underline"
+                                      >
+                                        Elegir uno existente
+                                      </button>
+                                    )}
+                                  </>
+                                )}
                                 <button
                                   onClick={() => handleMarcar(row, "otros")}
                                   disabled={saving}
